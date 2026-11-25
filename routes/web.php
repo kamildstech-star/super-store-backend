@@ -3,6 +3,7 @@
 use App\Http\Controllers\PosAuthController;
 use App\Http\Controllers\PosCatalogController;
 use App\Http\Controllers\PosManagementController;
+use App\Http\Controllers\PosInventoryController;
 use App\Http\Controllers\PosOrderController;
 use Illuminate\Support\Facades\Route;
 
@@ -15,6 +16,12 @@ Route::prefix('api/pos')->group(function (): void {
     Route::middleware(['auth', 'throttle:120,1'])->group(function (): void {
         Route::post('/auth/logout', [PosAuthController::class, 'logout']);
         Route::get('/catalog', PosCatalogController::class)->name('pos.catalog');
+        Route::get('/inventory', [PosInventoryController::class, 'index']);
+        Route::get('/inventory/{product}/movements', [PosInventoryController::class, 'movements'])->whereNumber('product');
+        Route::post('/inventory/{product}/movements', [PosInventoryController::class, 'record'])->whereNumber('product');
+        Route::put('/inventory/{product}/threshold', [PosInventoryController::class, 'threshold'])->whereNumber('product');
+        Route::post('/checkout', [PosOrderController::class, 'checkout']);
+        Route::post('/orders/{order}/checkout', [PosOrderController::class, 'checkout'])->whereNumber('order');
         Route::get('/orders', [PosOrderController::class, 'index']);
         Route::post('/orders', [PosOrderController::class, 'store']);
         Route::put('/orders/{order}', [PosOrderController::class, 'update'])->whereNumber('order');

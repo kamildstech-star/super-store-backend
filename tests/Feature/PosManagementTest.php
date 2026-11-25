@@ -189,6 +189,78 @@ class PosManagementTest extends TestCase
             ->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.id', $id);
     }
 
+    public function test_stock_audit_tracks_receipts_adjustments_damage_and_low_stock(): void
+    {
+        $this->seed();
+        $product = PosProduct::where('sku', 'APL-13')->firstOrFail();
+        $base = '/api/pos/inventory/'.$product->id;
+        $this->getJson('/api/pos/inventory')->assertUnauthorized();
+        $this->postJson($base.'/movements', [])->assertUnauthorized();
+        $this->actingAs($this->manager());
+        $supplier = $this->postJson('/api/pos/management/suppliers', ['name' => 'Produce Vendor'])->assertCreated()->json('id');
+        $move = fn (array $body) => $this->postJson($base.'/movements', $body + [
+            'request_id' => (string) \Illuminate\Support\Str::uuid(), 'reason' => 'Count sheet',
+        ]);
+        $opening = ['request_id' => (string) \Illuminate\Support\Str::uuid(), 'type' => 'opening', 'quantity' => 2.5];
+        $move($opening)->assertCreated()->assertJsonPath('balance_milli', 2500);
+        $move($opening)->assertOk()->assertJsonPath('balance_milli', 2500);
+        $move(['type' => 'opening', 'quantity' => 1])->assertJsonValidationErrors('type');
+        $move(['type' => 'receipt', 'quantity' => 1])->assertJsonValidationErrors('supplier_id');
+        $move(['type' => 'receipt', 'quantity' => 1.25, 'supplier_id' => $supplier])
+            ->assertCreated()->assertJsonPath('supplier_name', 'Produce Vendor')->assertJsonPath('balance_milli', 3750);
+        $move(['type' => 'adjustment', 'quantity' => -0.5])->assertCreated()->assertJsonPath('balance_milli', 3250);
+        $move(['type' => 'damage', 'quantity' => 0.25])->assertCreated()->assertJsonPath('balance_milli', 3000);
+        $move(['type' => 'damage', 'quantity' => 4])->assertJsonValidationErrors('quantity');
+        $this->putJson($base.'/threshold', ['quantity' => 3])->assertOk()->assertJsonPath('low_stock_milli', 3000);
+        $this->getJson('/api/pos/inventory?low_stock=1&q=APL-13&per_page=1')->assertJsonPath('data.0.stock_milli', 3000);
+        $this->getJson($base.'/movements?per_page=2')->assertJsonPath('meta.total', 4)
+            ->assertJsonPath('data.0.actor', 'POS Manager')->assertJsonPath('data.0.type', 'damage');
+        $this->deleteJson('/api/pos/management/suppliers/'.$supplier)->assertConflict();
+    }
+
+    public function test_checkout_is_atomic_idempotent_and_locks_finalized_orders(): void
+    {
+        $this->seed();
+        $this->actingAs($this->manager());
+        $one = PosProduct::where('sku', 'MIN-01')->firstOrFail();
+        $two = PosProduct::where('sku', 'CHP-05')->firstOrFail();
+        $body = ['request_id' => (string) \Illuminate\Support\Str::uuid(), 'lines' => [
+            ['sku' => $one->sku, 'qty' => 2, 'price_minor' => 10000, 'discount' => 0],
+            ['sku' => $two->sku, 'qty' => 1, 'price_minor' => 5000, 'discount' => 0],
+        ]];
+        $draft = $this->postJson('/api/pos/orders', $body)->assertCreated()->json();
+        $this->assertNull($draft['finalized_at']);
+        $this->assertSame(0, $one->fresh()->stock_milli);
+        $openStock = fn ($item, $quantity) => $this->postJson('/api/pos/inventory/'.$item->id.'/movements', [
+            'request_id' => (string) \Illuminate\Support\Str::uuid(), 'type' => 'opening', 'quantity' => $quantity, 'reason' => 'Initial count',
+        ]);
+        $openStock($one, 5)->assertCreated();
+        $fields = ['lines' => $body['lines'], 'revision' => $draft['revision'], 'payment_method' => 'cash',
+            'checkout_id' => (string) \Illuminate\Support\Str::uuid()];
+        $path = '/api/pos/orders/'.$draft['id'];
+        $this->postJson($path.'/checkout', $fields)->assertJsonValidationErrors('quantity');
+        $this->assertSame(5000, $one->fresh()->stock_milli);
+        $this->assertDatabaseMissing('pos_stock_movements', ['type' => 'sale']);
+        $direct = array_replace($body, ['request_id' => (string) \Illuminate\Support\Str::uuid(), 'payment_method' => 'card']);
+        $this->postJson('/api/pos/checkout', $direct)->assertJsonValidationErrors('quantity');
+        $this->assertDatabaseCount('pos_orders', 1);
+
+        $openStock($two, 3)->assertCreated();
+        $this->postJson($path.'/checkout', $fields)->assertOk()->assertJsonPath('payment_method', 'cash')
+            ->assertJsonPath('total_minor', 25000);
+        $this->postJson($path.'/checkout', $fields)->assertOk();
+        $this->postJson($path.'/checkout', array_replace($fields, ['checkout_id' => (string) \Illuminate\Support\Str::uuid()]))->assertConflict();
+        $this->putJson($path, $fields)->assertConflict();
+        $this->assertDatabaseHas('pos_stock_movements', ['order_id' => $draft['id'], 'product_id' => $one->id, 'delta_milli' => -2000]);
+        $this->assertSame(3000, $one->fresh()->stock_milli);
+        $this->assertSame(2000, $two->fresh()->stock_milli);
+        $this->postJson('/api/pos/checkout', $direct)->assertCreated()->assertJsonPath('payment_method', 'card');
+        $this->postJson('/api/pos/checkout', $direct)->assertOk();
+        $this->assertDatabaseCount('pos_orders', 2);
+        $this->assertSame(1000, $one->fresh()->stock_milli);
+        $this->assertSame(1000, $two->fresh()->stock_milli);
+    }
+
     public function test_crud_code_generation_and_conflict_protection(): void
     {
         $this->actingAs($this->manager());

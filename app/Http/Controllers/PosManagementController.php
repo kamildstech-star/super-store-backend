@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\PosCategory;
 use App\Models\PosProduct;
 use App\Models\PosSupplier;
+use App\Models\PosStockMovement;
 use App\Models\PosUnit;
 use App\Services\PosProductCode;
 use App\Services\PosListing;
@@ -14,6 +15,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -92,14 +94,27 @@ class PosManagementController extends Controller
 
     public function update(Request $request, string $resource, int $id): JsonResponse
     {
-        $record = self::TYPES[$resource]::findOrFail($id);
         try {
-            $record->update($this->validated($request, $resource, $record));
+            return DB::transaction(function () use ($request, $resource, $id) {
+                $record = self::TYPES[$resource]::query()->lockForUpdate()->findOrFail($id);
+                $data = $this->validated($request, $resource, $record);
+                if ($resource === 'products' && (int) $data['unit_id'] !== (int) $record->unit_id
+                    && PosStockMovement::where('product_id', $record->id)->exists()) {
+                    throw ValidationException::withMessages(['unit_id' => 'This product has stock history. Create a new product for a different unit.']);
+                }
+                if ($resource === 'units' && (int) $data['quantity_precision'] !== $record->quantity_precision) {
+                    $ids = PosProduct::where('unit_id', $record->id)->orderBy('id')->lockForUpdate()->pluck('id');
+                    if (PosStockMovement::whereIn('product_id', $ids)->exists()) {
+                        throw ValidationException::withMessages(['quantity_precision' => 'This unit has stock history. Create a new unit to use a different precision.']);
+                    }
+                }
+                $record->update($data);
+
+                return response()->json($record->refresh());
+            }, 3);
         } catch (UniqueConstraintViolationException $error) {
             throw ValidationException::withMessages(['record' => 'That code or barcode is already in use.']);
         }
-
-        return response()->json($record->refresh());
     }
 
     public function destroy(string $resource, int $id): JsonResponse
@@ -111,7 +126,8 @@ class PosManagementController extends Controller
             $foreignKey = match ($resource) {
                 'categories' => 'category_id', 'units' => 'unit_id', 'suppliers' => 'supplier_id',
             };
-            if (PosProduct::where($foreignKey, $id)->exists()) {
+            if (PosProduct::where($foreignKey, $id)->exists()
+                || ($resource === 'suppliers' && PosStockMovement::where('supplier_id', $id)->exists())) {
                 return $this->referenced();
             }
 
@@ -130,7 +146,7 @@ class PosManagementController extends Controller
 
     private function referenced(): JsonResponse
     {
-        return response()->json(['message' => 'This record is used by an active or archived product. Reassign that product before deleting it.'], 409);
+        return response()->json(['message' => 'This record is used by a product or inventory history and cannot be deleted while referenced.'], 409);
     }
 
     private function validated(Request $request, string $resource, ?Model $record = null): array

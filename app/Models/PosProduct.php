@@ -14,7 +14,7 @@ class PosProduct extends Model
 
     protected function casts(): array
     {
-        return ['price_minor' => 'integer', 'is_active' => 'boolean'];
+        return ['price_minor' => 'integer', 'is_active' => 'boolean', 'stock_milli' => 'integer', 'low_stock_milli' => 'integer'];
     }
 
     public function category(): BelongsTo

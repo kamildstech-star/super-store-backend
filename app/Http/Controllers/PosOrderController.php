@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\PosOrder;
 use App\Models\PosProduct;
 use App\Services\PosListing;
+use App\Services\PosInventory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -18,7 +19,7 @@ class PosOrderController extends Controller
         $filters = PosListing::filters($request);
         $term = $filters['q'] ?? '';
         $orders = PosOrder::query()
-            ->select(['id', 'created_at', 'cashier', 'customer', 'line_count', 'total_minor'])
+            ->select(['id', 'created_at', 'cashier', 'customer', 'line_count', 'total_minor', 'finalized_at', 'payment_method'])
             ->orderByDesc('id');
         if ($term !== '') {
             $orders->where(function ($match) use ($term): void {
@@ -60,6 +61,9 @@ class PosOrderController extends Controller
 
         return DB::transaction(function () use ($body, $order): JsonResponse {
             $saved = PosOrder::query()->lockForUpdate()->findOrFail($order);
+            if ($saved->finalized_at) {
+                return response()->json(['message' => 'Finalized sales cannot be edited.'], 409);
+            }
             if (! hash_equals($this->revision($saved), $body['revision'])) {
                 return response()->json(['message' => 'This order was changed elsewhere. Open it again to edit the latest version.'], 409);
             }
@@ -70,9 +74,61 @@ class PosOrderController extends Controller
         });
     }
 
+    public function checkout(Request $request, ?int $order = null): JsonResponse
+    {
+        $body = $request->validate([
+            'payment_method' => ['required', 'in:cash,card,bank_transfer'],
+        ] + ($order === null ? ['request_id' => ['required', 'uuid']] : ['revision' => ['required', 'string', 'size:64'], 'checkout_id' => ['required', 'uuid']]) + $this->orderRules());
+
+        return DB::transaction(function () use ($request, $order, $body): JsonResponse {
+            $user = $request->user();
+            $checkoutId = $body['checkout_id'] ?? $body['request_id'];
+            if ($order !== null) {
+                $saved = PosOrder::query()->lockForUpdate()->findOrFail($order);
+            } else {
+                $identity = ['user_id' => $user->id, 'request_id' => $body['request_id']];
+                $saved = PosOrder::where($identity)->first();
+                if (! $saved) {
+                    $saved = PosOrder::firstOrCreate($identity, ['cashier' => $user->name] + $this->orderAttributes($body));
+                }
+                $created = $saved->wasRecentlyCreated;
+                $saved = PosOrder::query()->lockForUpdate()->findOrFail($saved->id);
+            }
+
+            if ($saved->finalized_at) {
+                return $saved->checkout_id === $checkoutId && $saved->payment_method === $body['payment_method']
+                    ? response()->json($this->detail($saved))
+                    : response()->json(['message' => 'This sale has already been finalized.'], 409);
+            }
+            if ($order !== null && ! hash_equals($this->revision($saved), $body['revision'])) {
+                return response()->json(['message' => 'This order was changed elsewhere. Reopen it before finalizing.'], 409);
+            }
+            if ($order === null && ! $created) {
+                return response()->json(['message' => 'A draft already exists. Open it in Orders to finalize it.'], 409);
+            }
+
+            $attributes = $order === null ? ['lines' => $saved->lines] : $this->orderAttributes($body, $saved->lines);
+            $products = PosProduct::with('unit')->whereIn('sku', array_column($attributes['lines'], 'sku'))
+                ->where('is_active', true)->orderBy('id')->lockForUpdate()->get()->keyBy('sku');
+            foreach ($attributes['lines'] as $line) {
+                $product = $products->get($line['sku']);
+                if (! $product || $product->unit->code !== $line['unit']) {
+                    throw ValidationException::withMessages(['lines' => "{$line['name']} is unavailable or its unit changed. Remove it and add the current item before finalizing."]);
+                }
+                PosInventory::move($product, $user, 'sale', -(int) round($line['qty'] * 1000), 'Finalized sale', ['order_id' => $saved->id]);
+            }
+
+            $saved->fill($attributes)->forceFill([
+                'finalized_at' => now(), 'checkout_id' => $checkoutId, 'payment_method' => $body['payment_method'], 'finalized_by' => $user->id,
+            ])->save();
+
+            return response()->json($this->detail($saved), $order === null ? 201 : 200);
+        }, 3);
+    }
+
     private function detail(PosOrder $order): array
     {
-        return $order->toArray() + ['revision' => $this->revision($order)];
+        return $order->toArray() + ['revision' => $this->revision($order), 'finalized_at' => null, 'payment_method' => null];
     }
 
     private function revision(PosOrder $order): string

@@ -1,6 +1,6 @@
 # Super Store POS Backend
 
-Laravel 12 and MySQL for the POS catalog and management pages. Accounts are created from the command line, not by public sign-up. A separate opt-in seeder provides a local demo account. Authenticated users can use the register and all four management sections in this MVP; there is not yet a separate cashier role. Orders can be saved to MySQL and viewed in Orders. Saving an order does not charge anyone, mark it paid, or change inventory.
+Laravel 12 and MySQL for the POS catalog and management pages. Accounts are created from the command line, not by public sign-up. A separate opt-in seeder provides a local demo account. Authenticated users can use the register and all four management sections in this MVP; there is not yet a separate cashier role. Orders can be saved to MySQL and viewed in Orders. Saving a draft does not change inventory. Finalizing a sale records the payment method and deducts stock in the same transaction; the app does not charge customers. Finalized sales cannot be edited.
 
 ## Setup or upgrade
 
@@ -30,3 +30,14 @@ Products can be archived and restored via **Available in POS**. Categories, unit
 - The dev server proxies `/api/pos/*` to Laravel. For deployment use HTTPS, serve Vue and proxy POS API requests on the same origin, and set `SESSION_SECURE_COOKIE=true`. Keep the Laravel `.env` private. Treat this as a single-store MVP until separate cashier/manager roles and account recovery are in place.
 
 Run `php artisan test` for the automated feature tests (in-memory SQLite by default). For MySQL tests, prepare a separate empty database ending in `_test`, and run the suite with `DB_CONNECTION=mysql`, `DB_DATABASE=super_store_test` and your test credentials. The test suite refuses to run migrations on a MySQL database without this suffix.
+
+
+## Inventory and finalized checkout
+
+After upgrading with `php artisan migrate`, existing orders are drafts and stock balances start at zero. Enter real opening quantities before finalizing sales; demo seeders do not add stock balances.
+
+- `GET /api/pos/inventory` lists active products and balances, with normal paging/search and optional `low_stock=1`.
+- `POST /api/pos/inventory/{product}/movements` takes a UUID `request_id`, movement type, quantity and reason; supplier receipts also require a supplier. Stock history is paginated at the same path with GET.
+- `PUT /api/pos/inventory/{product}/threshold` sets a per-product low-stock quantity.
+- `POST /api/pos/checkout` finalizes a new cart using its draft fields and `payment_method`. `POST /api/pos/orders/{id}/checkout` also requires the draft edit revision and a UUID `checkout_id`. Retrying the same checkout does not deduct stock again.
+- These endpoints are for the single-store MVP. Till reconciliation, returns/refunds, reports, and separate manager-only permissions are not in this release.
