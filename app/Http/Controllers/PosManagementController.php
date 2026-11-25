@@ -7,6 +7,7 @@ use App\Models\PosProduct;
 use App\Models\PosSupplier;
 use App\Models\PosUnit;
 use App\Services\PosProductCode;
+use App\Services\PosListing;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -25,14 +26,37 @@ class PosManagementController extends Controller
         'suppliers' => PosSupplier::class,
     ];
 
-    public function index(): JsonResponse
+    public function index(Request $request, string $resource): JsonResponse
     {
-        $data = [];
-        foreach (self::TYPES as $name => $type) {
-            $data[$name] = $type::query()->orderBy('name')->orderBy('id')->get();
+        $filters = PosListing::filters($request);
+        $term = $filters['q'] ?? '';
+        $query = self::TYPES[$resource]::query()->orderBy('name')->orderBy('id');
+        if ($term !== '') {
+            $columns = match ($resource) {
+                'products' => ['name', 'sku', 'internal_code', 'barcode'],
+                'categories' => ['name', 'slug'],
+                'units' => ['name', 'code'],
+                'suppliers' => ['name', 'email', 'phone'],
+            };
+            $query->where(function ($match) use ($columns, $term, $resource): void {
+                PosListing::whereContains($match, $columns, $term);
+                if ($resource === 'products' && in_array(strtolower($term), ['active', 'archived'], true)) {
+                    $match->orWhere('is_active', strtolower($term) === 'active');
+                }
+            });
         }
 
-        return response()->json($data);
+        return PosListing::response($query, $filters);
+    }
+
+    public function options(): JsonResponse
+    {
+        // Product pickers use lightweight lookup data, independent of any listing page.
+        return response()->json([
+            'categories' => PosCategory::orderBy('name')->orderBy('id')->get(['id', 'name', 'slug']),
+            'units' => PosUnit::orderBy('name')->orderBy('id')->get(['id', 'name', 'code']),
+            'suppliers' => PosSupplier::orderBy('name')->orderBy('id')->get(['id', 'name', 'email', 'phone']),
+        ]);
     }
 
     public function store(Request $request, string $resource, PosProductCode $codes): JsonResponse

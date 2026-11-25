@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\PosOrder;
 use App\Models\PosProduct;
+use App\Services\PosListing;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -14,14 +15,25 @@ class PosOrderController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $filters = $request->validate(['before' => ['sometimes', 'integer', 'min:1']]);
+        $filters = PosListing::filters($request);
+        $term = $filters['q'] ?? '';
         $orders = PosOrder::query()
             ->select(['id', 'created_at', 'cashier', 'customer', 'line_count', 'total_minor'])
-            ->when(isset($filters['before']), fn ($query) => $query->where('id', '<', $filters['before']))
-            ->orderByDesc('id')->limit(31)->get();
-        $page = $orders->take(30)->values();
+            ->orderByDesc('id');
+        if ($term !== '') {
+            $orders->where(function ($match) use ($term): void {
+                PosListing::whereContains($match, ['cashier', 'customer'], $term);
+                $number = ltrim($term, '#');
+                if (ctype_digit($number) && strlen($number) <= 18) {
+                    $match->orWhere('id', (int) $number);
+                }
+                if (in_array(strtolower($term), ['walk-in', 'walk in'], true)) {
+                    $match->orWhereNull('customer');
+                }
+            });
+        }
 
-        return response()->json(['orders' => $page, 'next_before' => $orders->count() > 30 ? $page->last()->id : null]);
+        return PosListing::response($orders, $filters);
     }
 
     public function show(PosOrder $order): JsonResponse

@@ -24,8 +24,9 @@ Products can be archived and restored via **Available in POS**. Categories, unit
 
 - `GET /api/pos/auth/session` returns the current user (or null) and a CSRF token.
 - `POST /api/pos/auth/login` and `POST /api/pos/auth/logout` require that token in `X-CSRF-TOKEN` and cookies.
+- `GET /api/pos/management/{resource}` lists records. It and `GET /api/pos/orders` accept `page`, `per_page` (1–100, default 15), and `q`. They return `data` and `meta` with the current/last page, row range and total. `GET /api/pos/management/options` supplies lightweight product form lookups.
 - The catalog, management and orders endpoints require an authenticated session. JSON write requests also require the CSRF token.
-- `POST /api/pos/orders` saves the register order. `GET /api/pos/orders` lists recent orders (30 per page; follow `next_before` with `?before=…`), and `GET /api/pos/orders/{id}` shows the saved line details and an edit revision. `PUT /api/pos/orders/{id}` updates that same order if the revision still matches. It does not change the original cashier or create a second order.
+- `POST /api/pos/orders` saves the register order. `GET /api/pos/orders` lists orders with server-side pagination and search, and `GET /api/pos/orders/{id}` shows the saved line details and an edit revision. `PUT /api/pos/orders/{id}` updates that same order if the revision still matches. It does not change the original cashier or create a second order.
 - The dev server proxies `/api/pos/*` to Laravel. For deployment use HTTPS, serve Vue and proxy POS API requests on the same origin, and set `SESSION_SECURE_COOKIE=true`. Keep the Laravel `.env` private. Treat this as a single-store MVP until separate cashier/manager roles and account recovery are in place.
 
 Run `php artisan test` for the automated feature tests (in-memory SQLite by default). For MySQL tests, prepare a separate empty database ending in `_test`, and run the suite with `DB_CONNECTION=mysql`, `DB_DATABASE=super_store_test` and your test credentials. The test suite refuses to run migrations on a MySQL database without this suffix.

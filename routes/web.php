@@ -21,7 +21,8 @@ Route::prefix('api/pos')->group(function (): void {
         Route::get('/orders/{order}', [PosOrderController::class, 'show'])->whereNumber('order');
         Route::prefix('management')->group(function (): void {
             $resources = ['products', 'categories', 'units', 'suppliers'];
-            Route::get('/', [PosManagementController::class, 'index']);
+            Route::get('/options', [PosManagementController::class, 'options']);
+            Route::get('/{resource}', [PosManagementController::class, 'index'])->whereIn('resource', $resources);
             Route::post('/{resource}', [PosManagementController::class, 'store'])->whereIn('resource', $resources);
             Route::put('/{resource}/{id}', [PosManagementController::class, 'update'])->whereIn('resource', $resources)->whereNumber('id');
             Route::delete('/{resource}/{id}', [PosManagementController::class, 'destroy'])->whereIn('resource', $resources)->whereNumber('id');

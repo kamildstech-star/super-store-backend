@@ -41,7 +41,7 @@ class PosManagementTest extends TestCase
         $this->postJson('/api/pos/auth/login', ['email' => 'manager@example.test', 'password' => 'wrong'])->assertUnprocessable();
         $this->postJson('/api/pos/auth/login', ['email' => 'MANAGER@example.test', 'password' => 'test-only-password'])
             ->assertOk()->assertJsonPath('user.name', 'POS Manager')->assertJsonStructure(['csrf_token']);
-        $this->getJson('/api/pos/management')->assertOk();
+        $this->getJson('/api/pos/management/products')->assertOk();
         $this->getJson('/api/pos/auth/session')->assertJsonPath('user.email', 'manager@example.test');
         $this->postJson('/api/pos/auth/logout')->assertOk()->assertJsonPath('user', null);
         $this->getJson('/api/pos/catalog')->assertUnauthorized();
@@ -87,7 +87,7 @@ class PosManagementTest extends TestCase
         $this->getJson('/api/pos/orders/1')->assertUnauthorized();
 
         $this->actingAs($this->manager());
-        $this->getJson('/api/pos/orders')->assertExactJson(['orders' => [], 'next_before' => null]);
+        $this->getJson('/api/pos/orders')->assertJsonPath('data', [])->assertJsonPath('meta.total', 0);
         $body = [
             'request_id' => (string) \Illuminate\Support\Str::uuid(),
             'customer' => 'Walk-in Customer',
@@ -104,11 +104,11 @@ class PosManagementTest extends TestCase
             ->assertJsonPath('total_minor', 17502)->assertJsonPath('line_count', 1)->json('id');
         $this->postJson('/api/pos/orders', $body)->assertOk()->assertJsonPath('id', $id);
         $this->assertDatabaseCount('pos_orders', 1);
-        $this->getJson('/api/pos/orders')->assertOk()->assertJsonPath('orders.0.id', $id)
-            ->assertJsonMissingPath('orders.0.lines');
+        $this->getJson('/api/pos/orders')->assertOk()->assertJsonPath('data.0.id', $id)
+            ->assertJsonMissingPath('data.0.lines');
         $this->getJson('/api/pos/orders/'.$id)->assertOk()->assertJsonPath('note', 'Pack separately')
             ->assertJsonPath('lines.0.sku', 'MIN-01')->assertJsonPath('cashier', 'POS Manager');
-        $this->getJson('/api/pos/orders?before='.$id)->assertJsonCount(0, 'orders');
+        $this->getJson('/api/pos/orders?page=2')->assertJsonCount(0, 'data');
 
         $body['request_id'] = (string) \Illuminate\Support\Str::uuid();
         $body['lines'][0] = ['sku' => 'MIN-01', 'qty' => 9999, 'price_minor' => 4294967295, 'discount' => 0];
@@ -147,7 +147,46 @@ class PosManagementTest extends TestCase
         $this->assertDatabaseCount('pos_orders', 1);
         $this->putJson($path, $payload)->assertConflict();
         $this->getJson($path)->assertJsonPath('note', 'Updated note')->assertJsonCount(2, 'lines');
-        $this->getJson('/api/pos/orders')->assertJsonPath('orders.0.total_minor', 30001);
+        $this->getJson('/api/pos/orders')->assertJsonPath('data.0.total_minor', 30001);
+    }
+
+    public function test_listings_paginate_and_search_before_slicing(): void
+    {
+        $this->seed();
+        $this->getJson('/api/pos/management/products?page=2')->assertUnauthorized();
+        $this->actingAs($this->manager());
+        $prefix = '/api/pos/management/';
+
+        $this->postJson($prefix.'suppliers', ['name' => 'A Supplier', 'email' => 'a@example.test'])->assertCreated();
+        $this->postJson($prefix.'suppliers', ['name' => 'Z Supplier', 'email' => 'unique@example.test'])->assertCreated();
+        foreach (['products', 'categories', 'units', 'suppliers'] as $resource) {
+            $first = $this->getJson($prefix.$resource.'?page=1&per_page=1')->assertOk()
+                ->assertJsonCount(1, 'data')->assertJsonPath('meta.page', 1)->assertJsonPath('meta.from', 1)
+                ->assertJsonPath('meta.to', 1)->json('data.0.id');
+            $second = $this->getJson($prefix.$resource.'?page=2&per_page=1')->assertOk()
+                ->assertJsonCount(1, 'data')->assertJsonPath('meta.page', 2)->assertJsonPath('meta.from', 2)->json('data.0.id');
+            $this->assertNotSame($first, $second);
+        }
+        $this->getJson($prefix.'suppliers?q=UNIQUE&per_page=1')->assertJsonPath('data.0.name', 'Z Supplier')
+            ->assertJsonPath('meta.total', 1);
+        $this->getJson($prefix.'products?q=DEMO-0016&per_page=1')->assertJsonPath('data.0.barcode', 'DEMO-0016')
+            ->assertJsonPath('meta.total', 1);
+        $this->getJson($prefix.'products?q=%25')->assertJsonCount(0, 'data')->assertJsonPath('meta.total', 0);
+        $this->getJson($prefix.'units?per_page=101')->assertJsonValidationErrors('per_page');
+        $this->getJson($prefix.'options')->assertJsonCount(2, 'suppliers')->assertJsonMissingPath('products');
+        foreach (['First customer', 'Second customer'] as $customer) {
+            $this->postJson('/api/pos/orders', [
+                'request_id' => (string) \Illuminate\Support\Str::uuid(), 'customer' => $customer,
+                'lines' => [['sku' => 'MIN-01', 'qty' => 1, 'price_minor' => 10000, 'discount' => 0]],
+            ])->assertCreated();
+        }
+        $this->getJson('/api/pos/orders?per_page=1')->assertJsonPath('meta.total', 2)
+            ->assertJsonPath('data.0.customer', 'Second customer');
+        $id = $this->getJson('/api/pos/orders?page=2&per_page=1')->assertJsonPath('meta.page', 2)
+            ->assertJsonPath('data.0.customer', 'First customer')->json('data.0.id');
+        $this->getJson('/api/pos/orders?q=FIRST&per_page=1')->assertJsonPath('data.0.id', $id);
+        $this->getJson('/api/pos/orders?q='.urlencode('#'.str_pad((string) $id, 3, '0', STR_PAD_LEFT)))
+            ->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.id', $id);
     }
 
     public function test_crud_code_generation_and_conflict_protection(): void
