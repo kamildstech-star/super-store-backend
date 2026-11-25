@@ -21,6 +21,8 @@ class PosCatalogController extends Controller
             ->orderBy('sort_order')->orderBy('id')->get()
             ->map(fn (PosProduct $product): array => [
                 'sku' => $product->sku,
+                'internal_code' => $product->internal_code,
+                'barcode' => $product->barcode,
                 'name' => $product->name,
                 'category' => $product->category->slug,
                 'unit' => $product->unit->code,

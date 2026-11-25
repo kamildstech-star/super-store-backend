@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class PosProduct extends Model
 {
     protected $fillable = [
-        'sku', 'category_id', 'unit_id', 'name', 'price_minor', 'is_active',
+        'sku', 'internal_code', 'barcode', 'supplier_id', 'category_id', 'unit_id', 'name', 'price_minor', 'is_active',
         'sort_order', 'art_shape', 'art_ink', 'art_tone', 'art_label',
     ];
 

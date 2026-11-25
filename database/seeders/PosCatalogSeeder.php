@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\PosCategory;
 use App\Models\PosProduct;
 use App\Models\PosUnit;
+use App\Services\PosProductCode;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 
@@ -57,7 +58,12 @@ class PosCatalogSeeder extends Seeder
                 ['TOM-15','Tomatoes','produce','kg',190,'tomato','#d64a3d','#f8eae4',''],
                 ['ORA-16','Oranges','produce','kg',245,'orange','#e29335','#faecdd',''],
             ] as $order => [$sku, $name, $category, $unit, $rupees, $shape, $ink, $tone, $label]) {
-                PosProduct::updateOrCreate(['sku' => $sku], [
+                if (PosProduct::where('sku', $sku)->exists()) {
+                    continue;
+                }
+                PosProduct::create([
+                    'sku' => $sku, 'internal_code' => app(PosProductCode::class)->next(),
+                    'barcode' => sprintf('DEMO-%04d', $order + 1),
                     'name' => $name, 'category_id' => $categories[$category], 'unit_id' => $units[$unit],
                     'price_minor' => $rupees * 100, 'is_active' => true, 'sort_order' => $order,
                     'art_shape' => $shape, 'art_ink' => $ink, 'art_tone' => $tone, 'art_label' => $label,

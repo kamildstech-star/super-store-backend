@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\PosProduct;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -25,6 +26,14 @@ class PosCatalogTest extends TestCase
         }
 
         $this->runTestMigrations();
+    }
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        $this->actingAs(User::create([
+            'name' => 'Manager', 'email' => 'manager@example.test', 'password' => 'test-only-password',
+        ]));
     }
 
     public function test_seeded_rows_are_repeatable_and_exposed_through_the_api(): void
