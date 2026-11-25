@@ -115,6 +115,41 @@ class PosManagementTest extends TestCase
         $this->postJson('/api/pos/orders', $body)->assertCreated()->assertJsonPath('total_minor', 42945377982705);
     }
 
+    public function test_saved_order_edits_replace_items_without_creating_an_order(): void
+    {
+        $this->seed();
+        $this->putJson('/api/pos/orders/1', [])->assertUnauthorized();
+        $this->actingAs($this->manager());
+
+        $line = ['sku' => 'MIN-01', 'qty' => 2, 'price_minor' => 10000, 'discount' => 0];
+        $removed = ['sku' => 'CHP-05', 'qty' => 1, 'price_minor' => 2500, 'discount' => 0];
+        $order = $this->postJson('/api/pos/orders', [
+            'request_id' => (string) \Illuminate\Support\Str::uuid(),
+            'note' => 'Original note',
+            'lines' => [$line, $removed],
+        ])->assertCreated()->json();
+        $path = '/api/pos/orders/'.$order['id'];
+        $revision = $this->getJson($path)->assertOk()->assertJsonPath('revision', $order['revision'])->json('revision');
+
+        // The archived item can remain as recorded, but cannot be modified or added anew.
+        PosProduct::where('sku', 'MIN-01')->update(['is_active' => false]);
+        $new = ['sku' => 'APL-13', 'qty' => 0.5, 'price_minor' => 20001, 'discount' => 0];
+        $payload = ['revision' => $revision, 'note' => 'Updated note', 'lines' => [$line, $new]];
+        $bad = $payload;
+        $bad['lines'][0]['qty'] = 3;
+        $this->putJson($path, $bad)->assertJsonValidationErrors('lines.0.sku');
+        $this->putJson($path, ['revision' => $revision, 'lines' => []])->assertJsonValidationErrors('lines');
+
+        $this->putJson($path, $payload)->assertOk()->assertJsonPath('id', $order['id'])
+            ->assertJsonPath('cashier', 'POS Manager')->assertJsonPath('created_at', $order['created_at'])
+            ->assertJsonPath('lines.0.sku', 'MIN-01')->assertJsonPath('lines.1.sku', 'APL-13')
+            ->assertJsonPath('total_minor', 30001);
+        $this->assertDatabaseCount('pos_orders', 1);
+        $this->putJson($path, $payload)->assertConflict();
+        $this->getJson($path)->assertJsonPath('note', 'Updated note')->assertJsonCount(2, 'lines');
+        $this->getJson('/api/pos/orders')->assertJsonPath('orders.0.total_minor', 30001);
+    }
+
     public function test_crud_code_generation_and_conflict_protection(): void
     {
         $this->actingAs($this->manager());

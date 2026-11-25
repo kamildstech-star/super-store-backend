@@ -17,6 +17,7 @@ Route::prefix('api/pos')->group(function (): void {
         Route::get('/catalog', PosCatalogController::class)->name('pos.catalog');
         Route::get('/orders', [PosOrderController::class, 'index']);
         Route::post('/orders', [PosOrderController::class, 'store']);
+        Route::put('/orders/{order}', [PosOrderController::class, 'update'])->whereNumber('order');
         Route::get('/orders/{order}', [PosOrderController::class, 'show'])->whereNumber('order');
         Route::prefix('management')->group(function (): void {
             $resources = ['products', 'categories', 'units', 'suppliers'];
