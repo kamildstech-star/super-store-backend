@@ -4,6 +4,8 @@ namespace Tests\Feature;
 
 use App\Models\PosProduct;
 use App\Models\User;
+use Database\Seeders\PosDemoUserSeeder;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -44,6 +46,37 @@ class PosManagementTest extends TestCase
         $this->postJson('/api/pos/auth/logout')->assertOk()->assertJsonPath('user', null);
         $this->getJson('/api/pos/catalog')->assertUnauthorized();
         $this->postJson('/register', [])->assertNotFound();
+    }
+
+    public function test_demo_account_is_opt_in_local_only_and_keeps_an_existing_password(): void
+    {
+        $demoPassword = \Illuminate\Support\Str::random(24);
+        config(['pos.demo_password' => $demoPassword]);
+        $this->app->instance('env', 'production');
+        $this->artisan('db:seed', ['--class' => PosDemoUserSeeder::class, '--force' => true])->assertSuccessful();
+        $this->assertDatabaseMissing('users', ['email' => 'admin@demo.com']);
+
+        $this->app->instance('env', 'local');
+        config(['pos.demo_password' => null]);
+        $this->seed(PosDemoUserSeeder::class);
+        $this->assertDatabaseMissing('users', ['email' => 'admin@demo.com']);
+
+        config(['pos.demo_password' => $demoPassword]);
+        $this->seed();
+        $this->assertDatabaseMissing('users', ['email' => 'admin@demo.com']);
+        $this->seed(PosDemoUserSeeder::class);
+        $this->seed(PosDemoUserSeeder::class);
+        $this->assertDatabaseCount('users', 1);
+
+        $this->app->instance('env', 'testing');
+        $this->postJson('/api/pos/auth/login', ['email' => 'admin@demo.com', 'password' => $demoPassword])
+            ->assertOk()->assertJsonPath('user.email', 'admin@demo.com');
+
+        $this->app->instance('env', 'local');
+        $user = User::where('email', 'admin@demo.com')->firstOrFail();
+        $user->update(['password' => 'changed-demo-password']);
+        $this->seed(PosDemoUserSeeder::class);
+        $this->assertTrue(Hash::check('changed-demo-password', $user->refresh()->password));
     }
 
     public function test_crud_code_generation_and_conflict_protection(): void
