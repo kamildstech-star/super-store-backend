@@ -1,0 +1,19 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_DATABASE: ${DB_DATABASE:-super_store}
+      MYSQL_USER: ${DB_USERNAME:-super_store}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env before starting MySQL}
+    ports:
+      - "127.0.0.1:${DB_PORT:-3306}:3306"
+    volumes:
+      - pos_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 3s
+      timeout: 4s
+      retries: 30
+volumes:
+  pos_mysql_data:
