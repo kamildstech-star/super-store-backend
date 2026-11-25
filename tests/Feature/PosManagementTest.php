@@ -79,6 +79,42 @@ class PosManagementTest extends TestCase
         $this->assertTrue(Hash::check('changed-demo-password', $user->refresh()->password));
     }
 
+    public function test_register_orders_are_saved_listed_and_protected(): void
+    {
+        $this->seed();
+        $this->getJson('/api/pos/orders')->assertUnauthorized();
+        $this->postJson('/api/pos/orders', [])->assertUnauthorized();
+        $this->getJson('/api/pos/orders/1')->assertUnauthorized();
+
+        $this->actingAs($this->manager());
+        $this->getJson('/api/pos/orders')->assertExactJson(['orders' => [], 'next_before' => null]);
+        $body = [
+            'request_id' => (string) \Illuminate\Support\Str::uuid(),
+            'customer' => 'Walk-in Customer',
+            'note' => 'Pack separately',
+            'lines' => [['sku' => 'MIN-01', 'qty' => 2, 'price_minor' => 10001, 'discount' => 12.5]],
+        ];
+        $bad = $body;
+        $bad['lines'][0]['qty'] = 0.5;
+        $this->postJson('/api/pos/orders', $bad)->assertJsonValidationErrors('lines.0.qty');
+        $bad['lines'][0]['sku'] = 'MISSING';
+        $this->postJson('/api/pos/orders', $bad)->assertJsonValidationErrors('lines.0.sku');
+
+        $id = $this->postJson('/api/pos/orders', $body)->assertCreated()
+            ->assertJsonPath('total_minor', 17502)->assertJsonPath('line_count', 1)->json('id');
+        $this->postJson('/api/pos/orders', $body)->assertOk()->assertJsonPath('id', $id);
+        $this->assertDatabaseCount('pos_orders', 1);
+        $this->getJson('/api/pos/orders')->assertOk()->assertJsonPath('orders.0.id', $id)
+            ->assertJsonMissingPath('orders.0.lines');
+        $this->getJson('/api/pos/orders/'.$id)->assertOk()->assertJsonPath('note', 'Pack separately')
+            ->assertJsonPath('lines.0.sku', 'MIN-01')->assertJsonPath('cashier', 'POS Manager');
+        $this->getJson('/api/pos/orders?before='.$id)->assertJsonCount(0, 'orders');
+
+        $body['request_id'] = (string) \Illuminate\Support\Str::uuid();
+        $body['lines'][0] = ['sku' => 'MIN-01', 'qty' => 9999, 'price_minor' => 4294967295, 'discount' => 0];
+        $this->postJson('/api/pos/orders', $body)->assertCreated()->assertJsonPath('total_minor', 42945377982705);
+    }
+
     public function test_crud_code_generation_and_conflict_protection(): void
     {
         $this->actingAs($this->manager());

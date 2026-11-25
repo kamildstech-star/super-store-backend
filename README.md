@@ -1,6 +1,6 @@
 # Super Store POS Backend
 
-Laravel 12 and MySQL for the POS catalog and management pages. Accounts are created from the command line, not by public sign-up. A separate opt-in seeder provides a local demo account. Authenticated users can use the register and all four management sections in this MVP; there is not yet a separate cashier role. Cart and payment remain previews and do not save sales.
+Laravel 12 and MySQL for the POS catalog and management pages. Accounts are created from the command line, not by public sign-up. A separate opt-in seeder provides a local demo account. Authenticated users can use the register and all four management sections in this MVP; there is not yet a separate cashier role. Orders can be saved to MySQL and viewed in Orders. Saving an order does not charge anyone, mark it paid, or change inventory.
 
 ## Setup or upgrade
 
@@ -24,7 +24,8 @@ Products can be archived and restored via **Available in POS**. Categories, unit
 
 - `GET /api/pos/auth/session` returns the current user (or null) and a CSRF token.
 - `POST /api/pos/auth/login` and `POST /api/pos/auth/logout` require that token in `X-CSRF-TOKEN` and cookies.
-- The catalog and management endpoints require an authenticated session. JSON write requests also require the CSRF token.
+- The catalog, management and orders endpoints require an authenticated session. JSON write requests also require the CSRF token.
+- `POST /api/pos/orders` saves the register order. `GET /api/pos/orders` lists recent orders (30 per page; follow `next_before` with `?before=…`), and `GET /api/pos/orders/{id}` shows the saved line details.
 - The dev server proxies `/api/pos/*` to Laravel. For deployment use HTTPS, serve Vue and proxy POS API requests on the same origin, and set `SESSION_SECURE_COOKIE=true`. Keep the Laravel `.env` private. Treat this as a single-store MVP until separate cashier/manager roles and account recovery are in place.
 
 Run `php artisan test` for the automated feature tests (in-memory SQLite by default). For MySQL tests, prepare a separate empty database ending in `_test`, and run the suite with `DB_CONNECTION=mysql`, `DB_DATABASE=super_store_test` and your test credentials. The test suite refuses to run migrations on a MySQL database without this suffix.
