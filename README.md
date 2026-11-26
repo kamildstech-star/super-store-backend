@@ -1,6 +1,6 @@
 # Super Store POS Backend
 
-Laravel 12 and MySQL for the POS catalog and management pages. Accounts are created from the command line, not by public sign-up. A separate opt-in seeder provides a local demo account. Authenticated users can use the register and all four management sections in this MVP; there is not yet a separate cashier role. Orders can be saved to MySQL and viewed in Orders. Saving a draft does not change inventory. Finalizing a sale records the payment method and deducts stock in the same transaction; the app does not charge customers. Finalized sales cannot be edited.
+Laravel 12 and MySQL for the POS catalog and management pages. Accounts are created from the command line, not by public sign-up. A separate opt-in seeder provides a local demo account. Authenticated users can use the register and all four management sections in this MVP; there is not yet a separate cashier role. Orders can be saved to MySQL and viewed in Orders. Saving a draft does not change inventory. Finalizing a sale records the payment method and cash tender (for cash) and deducts stock in the same transaction; the app does not charge customers. Finalized sales cannot be edited.
 
 ## Setup or upgrade
 
@@ -38,10 +38,12 @@ Run `php artisan test` for the automated feature tests (in-memory SQLite by defa
 
 ## Inventory and finalized checkout
 
-After upgrading with `php artisan migrate`, existing orders are drafts and stock balances start at zero. Enter real opening quantities before finalizing sales; demo seeders do not add stock balances.
+Run `php artisan migrate` before using the matching frontend. The checkout migration preserves existing orders and stock. Older cash receipts have no recorded cash tender or change. For a fresh installation, enter real opening quantities before finalizing sales; demo seeders do not add stock balances.
 
-- `GET /api/pos/inventory` lists active products and balances, with normal paging/search and optional `low_stock=1`.
+- `GET /api/pos/inventory` lists active and archived products and balances, with normal paging/search, optional `status=active|archived`, and `low_stock=1`.
 - `POST /api/pos/inventory/{product}/movements` takes a UUID `request_id`, movement type, quantity and reason; supplier receipts also require a supplier. Stock history is paginated at the same path with GET.
 - `PUT /api/pos/inventory/{product}/threshold` sets a per-product low-stock quantity.
-- `POST /api/pos/checkout` finalizes a new cart using its draft fields and `payment_method`. `POST /api/pos/orders/{id}/checkout` also requires the draft edit revision and a UUID `checkout_id`. Retrying the same checkout does not deduct stock again.
+- `POST /api/pos/checkout` finalizes a new cart using its draft fields and `payment_method`. `POST /api/pos/orders/{id}/checkout` also requires the draft edit revision and a UUID `checkout_id`. Cash requires integer `cash_received_minor` in paisa, at least the server-calculated order total. Other methods do not take cash tender.
+- `GET /api/pos/orders/{id}` has the saved line, payment, finalization, cashier, and tender details used by the receipt. `change_minor` is computed from recorded tender and the immutable finalized total.
+- Replay the exact submission on a timeout, with the same `request_id`, `checkout_id`, or draft PUT `update_id`. Replaying a successful checkout does not deduct stock again. Reusing a key with different contents returns a conflict; check Orders before creating a new sale.
 - These endpoints are for the single-store MVP. Till reconciliation, returns/refunds, reports, and separate manager-only permissions are not in this release.

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\PosOrder;
 use App\Models\PosProduct;
+use App\Models\User;
 use App\Services\PosListing;
 use App\Services\PosInventory;
 use Illuminate\Http\JsonResponse;
@@ -45,30 +46,49 @@ class PosOrderController extends Controller
     public function store(Request $request): JsonResponse
     {
         $body = $request->validate(['request_id' => ['required', 'uuid']] + $this->orderRules());
-        $identity = ['user_id' => $request->user()->id, 'request_id' => $body['request_id']];
-        if ($existing = PosOrder::where($identity)->first()) {
-            return response()->json($this->detail($existing));
-        }
+        return DB::transaction(function () use ($request, $body): JsonResponse {
+            $identity = ['user_id' => $request->user()->id, 'request_id' => $body['request_id']];
+            // Serialize same-cashier Park/checkout retries, including before the order row exists.
+            User::query()->lockForUpdate()->findOrFail($identity['user_id']);
+            $fingerprint = $this->fingerprint('park', $body);
+            if ($existing = PosOrder::where($identity)->lockForUpdate()->first()) {
+                $original = $existing->request_fingerprint ?? $this->fingerprint('park', $existing->toArray());
 
-        $order = PosOrder::firstOrCreate($identity, ['cashier' => $request->user()->name] + $this->orderAttributes($body));
+                return ! $existing->finalized_at && hash_equals($original, $fingerprint)
+                    ? response()->json($this->detail($existing))
+                    : $this->submissionConflict($existing);
+            }
 
-        return response()->json($this->detail($order), $order->wasRecentlyCreated ? 201 : 200);
+            $order = new PosOrder($identity + ['cashier' => $request->user()->name] + $this->orderAttributes($body));
+            $order->forceFill(['request_fingerprint' => $fingerprint])->save();
+
+            return response()->json($this->detail($order), 201);
+        }, 3);
     }
 
     public function update(Request $request, int $order): JsonResponse
     {
-        $body = $request->validate(['revision' => ['required', 'string', 'size:64']] + $this->orderRules());
+        $body = $request->validate(['revision' => ['required', 'string', 'size:64'], 'update_id' => ['sometimes', 'required', 'uuid']] + $this->orderRules());
 
         return DB::transaction(function () use ($body, $order): JsonResponse {
             $saved = PosOrder::query()->lockForUpdate()->findOrFail($order);
             if ($saved->finalized_at) {
                 return response()->json(['message' => 'Finalized sales cannot be edited.'], 409);
             }
+            $fingerprint = $this->fingerprint('update', $body);
+            if (isset($body['update_id']) && $saved->update_request_id === $body['update_id']) {
+                return hash_equals($saved->update_fingerprint ?? '', $fingerprint)
+                    ? response()->json($this->detail($saved))
+                    : $this->submissionConflict($saved);
+            }
             if (! hash_equals($this->revision($saved), $body['revision'])) {
                 return response()->json(['message' => 'This order was changed elsewhere. Open it again to edit the latest version.'], 409);
             }
 
-            $saved->update($this->orderAttributes($body, $saved->lines));
+            $saved->fill($this->orderAttributes($body, $saved->lines))->forceFill([
+                'update_request_id' => $body['update_id'] ?? null,
+                'update_fingerprint' => isset($body['update_id']) ? $fingerprint : null,
+            ])->save();
 
             return response()->json($this->detail($saved));
         });
@@ -78,36 +98,46 @@ class PosOrderController extends Controller
     {
         $body = $request->validate([
             'payment_method' => ['required', 'in:cash,card,bank_transfer'],
+            'cash_received_minor' => ['required_if:payment_method,cash', 'prohibited_unless:payment_method,cash', 'integer', 'between:0,9000000000000000'],
         ] + ($order === null ? ['request_id' => ['required', 'uuid']] : ['revision' => ['required', 'string', 'size:64'], 'checkout_id' => ['required', 'uuid']]) + $this->orderRules());
 
         return DB::transaction(function () use ($request, $order, $body): JsonResponse {
             $user = $request->user();
             $checkoutId = $body['checkout_id'] ?? $body['request_id'];
+            $fingerprint = $this->fingerprint('checkout', $body);
             if ($order !== null) {
                 $saved = PosOrder::query()->lockForUpdate()->findOrFail($order);
             } else {
+                User::query()->lockForUpdate()->findOrFail($user->id);
                 $identity = ['user_id' => $user->id, 'request_id' => $body['request_id']];
-                $saved = PosOrder::where($identity)->first();
-                if (! $saved) {
-                    $saved = PosOrder::firstOrCreate($identity, ['cashier' => $user->name] + $this->orderAttributes($body));
+                $saved = PosOrder::where($identity)->lockForUpdate()->first();
+                $created = $saved === null;
+                if ($created) {
+                    $saved = PosOrder::create($identity + ['cashier' => $user->name] + $this->orderAttributes($body));
                 }
-                $created = $saved->wasRecentlyCreated;
-                $saved = PosOrder::query()->lockForUpdate()->findOrFail($saved->id);
             }
 
             if ($saved->finalized_at) {
-                return $saved->checkout_id === $checkoutId && $saved->payment_method === $body['payment_method']
+                // Older receipts have no fingerprint or tender; do not invent either.
+                $original = $saved->checkout_fingerprint ?? $this->fingerprint('checkout', $saved->toArray() + [
+                    'revision' => $body['revision'] ?? null,
+                ]);
+                return $saved->checkout_id === $checkoutId && hash_equals($original, $fingerprint)
                     ? response()->json($this->detail($saved))
-                    : response()->json(['message' => 'This sale has already been finalized.'], 409);
+                    : $this->submissionConflict($saved);
             }
             if ($order !== null && ! hash_equals($this->revision($saved), $body['revision'])) {
                 return response()->json(['message' => 'This order was changed elsewhere. Reopen it before finalizing.'], 409);
             }
             if ($order === null && ! $created) {
-                return response()->json(['message' => 'A draft already exists. Open it in Orders to finalize it.'], 409);
+                return $this->submissionConflict($saved);
             }
 
-            $attributes = $order === null ? ['lines' => $saved->lines] : $this->orderAttributes($body, $saved->lines);
+            $attributes = $order === null ? ['lines' => $saved->lines, 'total_minor' => $saved->total_minor] : $this->orderAttributes($body, $saved->lines);
+            $received = isset($body['cash_received_minor']) ? (int) $body['cash_received_minor'] : null;
+            if ($received !== null && $received < $attributes['total_minor']) {
+                throw ValidationException::withMessages(['cash_received_minor' => 'Cash received must cover the sale total.']);
+            }
             $products = PosProduct::with('unit')->whereIn('sku', array_column($attributes['lines'], 'sku'))
                 ->where('is_active', true)->orderBy('id')->lockForUpdate()->get()->keyBy('sku');
             foreach ($attributes['lines'] as $line) {
@@ -120,15 +150,38 @@ class PosOrderController extends Controller
 
             $saved->fill($attributes)->forceFill([
                 'finalized_at' => now(), 'checkout_id' => $checkoutId, 'payment_method' => $body['payment_method'], 'finalized_by' => $user->id,
+                'finalized_cashier' => $user->name, 'cash_received_minor' => $received, 'checkout_fingerprint' => $fingerprint,
             ])->save();
 
             return response()->json($this->detail($saved), $order === null ? 201 : 200);
         }, 3);
     }
 
+    private function submissionConflict(PosOrder $order): JsonResponse
+    {
+        return response()->json(['message' => "Order #{$order->id} already has a different submission. Check it in Orders before retrying."], 409);
+    }
+
+    private function fingerprint(string $operation, array $body): string
+    {
+        return hash('sha256', json_encode([
+            $operation, $body['revision'] ?? null, $body['customer'] ?? null, $body['note'] ?? null,
+            $body['payment_method'] ?? null, isset($body['cash_received_minor']) ? (int) $body['cash_received_minor'] : null,
+            array_map(fn (array $line) => [
+                $line['sku'], (int) round($line['qty'] * 1000), (int) $line['price_minor'], (int) round($line['discount'] * 100),
+            ], $body['lines']),
+        ], JSON_THROW_ON_ERROR));
+    }
+
     private function detail(PosOrder $order): array
     {
-        return $order->toArray() + ['revision' => $this->revision($order), 'finalized_at' => null, 'payment_method' => null];
+        return $order->toArray() + [
+            'revision' => $this->revision($order),
+            'finalized_at' => null,
+            'payment_method' => null,
+            'cash_received_minor' => null,
+            'change_minor' => $order->cash_received_minor === null ? null : $order->cash_received_minor - $order->total_minor,
+        ];
     }
 
     private function revision(PosOrder $order): string

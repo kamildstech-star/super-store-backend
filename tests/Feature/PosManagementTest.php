@@ -252,6 +252,55 @@ class PosManagementTest extends TestCase
         $this->getJson($base.'/movements')->assertJsonPath('meta.total', 3);
     }
 
+    public function test_cash_tender_and_retry_payloads_are_checked_against_the_original_submission(): void
+    {
+        $this->seed();
+        $this->actingAs($this->manager());
+        $sku = 'APL-13';
+        PosProduct::where('sku', $sku)->update(['stock_milli' => 5000]);
+        $uuid = fn () => (string) \Illuminate\Support\Str::uuid();
+        $cart = ['request_id' => $uuid(), 'lines' => [['sku' => $sku, 'qty' => 1.5, 'price_minor' => 19999, 'discount' => 50]]];
+        $cash = $cart + ['payment_method' => 'cash'];
+        $this->postJson('/api/pos/checkout', $cash)->assertJsonValidationErrors('cash_received_minor');
+        $this->postJson('/api/pos/checkout', $cash + ['cash_received_minor' => 14998])->assertJsonValidationErrors('cash_received_minor');
+        $this->postJson('/api/pos/checkout', $cart + ['payment_method' => 'card', 'cash_received_minor' => 20000])->assertJsonValidationErrors('cash_received_minor');
+        $this->assertDatabaseCount('pos_orders', 0);
+        $this->assertDatabaseCount('pos_stock_movements', 0);
+
+        $cash += ['cash_received_minor' => 20000];
+        $id = $this->postJson('/api/pos/checkout', $cash)->assertCreated()
+            ->assertJsonPath('total_minor', 14999)->assertJsonPath('cash_received_minor', 20000)
+            ->assertJsonPath('change_minor', 5001)->assertJsonPath('finalized_cashier', 'POS Manager')
+            ->assertJsonMissingPath('checkout_fingerprint')->json('id');
+        $this->postJson('/api/pos/checkout', $cash)->assertOk()->assertJsonPath('id', $id);
+        $this->postJson('/api/pos/checkout', array_replace($cash, ['cash_received_minor' => 30000]))->assertConflict();
+        $this->postJson('/api/pos/checkout', array_replace($cash, ['note' => 'New note']))->assertConflict();
+        $this->postJson('/api/pos/orders', $cart)->assertConflict();
+        $this->getJson('/api/pos/orders/'.$id)->assertJsonPath('change_minor', 5001);
+        $this->assertDatabaseCount('pos_stock_movements', 1);
+
+        $cart['request_id'] = $uuid();
+        $draft = $this->postJson('/api/pos/orders', $cart)->assertCreated()->json();
+        $this->postJson('/api/pos/orders', $cart)->assertOk()->assertJsonPath('id', $draft['id']);
+        $this->postJson('/api/pos/orders', array_replace($cart, ['note' => 'New note']))->assertConflict();
+        $this->postJson('/api/pos/checkout', $cart + ['payment_method' => 'cash', 'cash_received_minor' => 20000])->assertConflict();
+        $path = '/api/pos/orders/'.$draft['id'];
+        $edit = ['update_id' => $uuid(), 'revision' => $draft['revision'], 'lines' => $cart['lines'], 'note' => 'Edited'];
+        $edited = $this->putJson($path, $edit)->assertOk()->json();
+        $this->putJson($path, $edit)->assertOk()->assertJsonPath('note', 'Edited');
+        $this->putJson($path, array_replace($edit, ['note' => 'Different']))->assertConflict();
+
+        $other = User::create(['name' => 'Checkout Cashier', 'email' => 'checkout@example.test', 'password' => 'test-only-password']);
+        $this->actingAs($other);
+        $draftCheckout = ['checkout_id' => $uuid(), 'revision' => $edited['revision'], 'lines' => $edit['lines'], 'note' => 'Edited',
+            'payment_method' => 'cash', 'cash_received_minor' => 14999];
+        $this->postJson($path.'/checkout', $draftCheckout)->assertOk()
+            ->assertJsonPath('change_minor', 0)->assertJsonPath('finalized_cashier', 'Checkout Cashier');
+        $this->postJson($path.'/checkout', $draftCheckout)->assertOk();
+        $this->postJson($path.'/checkout', array_replace($draftCheckout, ['cash_received_minor' => 20000]))->assertConflict();
+        $this->assertDatabaseCount('pos_stock_movements', 2);
+    }
+
     public function test_checkout_is_atomic_idempotent_and_locks_finalized_orders(): void
     {
         $this->seed();
@@ -270,7 +319,7 @@ class PosManagementTest extends TestCase
         ]);
         $openStock($one, 5)->assertCreated();
         $fields = ['lines' => $body['lines'], 'revision' => $draft['revision'], 'payment_method' => 'cash',
-            'checkout_id' => (string) \Illuminate\Support\Str::uuid()];
+            'checkout_id' => (string) \Illuminate\Support\Str::uuid(), 'cash_received_minor' => 30000];
         $path = '/api/pos/orders/'.$draft['id'];
         $this->postJson($path.'/checkout', $fields)->assertJsonValidationErrors('quantity');
         $this->assertSame(5000, $one->fresh()->stock_milli);
