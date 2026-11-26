@@ -164,6 +164,7 @@ class PosManagementController extends Controller
                 'internal_code' => [$record ? 'required' : 'nullable', 'string', 'regex:/^[0-9]{4}$/D', $unique('internal_code')],
                 'barcode' => ['nullable', 'string', 'regex:/^[A-Z0-9._-]{1,48}$/D', $unique('barcode')],
                 'price_minor' => ['required', 'integer', 'between:0,99999999'],
+                'retail_price_minor' => ['sometimes', 'required', 'integer', 'between:0,99999999'],
                 'category_id' => ['required', 'integer', 'exists:pos_categories,id'],
                 'unit_id' => ['required', 'integer', 'exists:pos_units,id'],
                 'supplier_id' => ['nullable', 'integer', 'exists:pos_suppliers,id'],
@@ -175,8 +176,15 @@ class PosManagementController extends Controller
             'suppliers' => ['email' => ['nullable', 'email:rfc', 'max:254'], 'phone' => ['nullable', 'string', 'max:40']],
         };
 
-        return $request->validate(['name' => ['required', 'string', 'max:'.match ($resource) {
+        $data = $request->validate(['name' => ['required', 'string', 'max:'.match ($resource) {
             'units' => 40, 'categories' => 100, default => 150,
         }]] + $fields);
+
+        if ($resource === 'products') {
+            // Older clients only send price_minor (the POS sale price).
+            $data['retail_price_minor'] ??= $record?->retail_price_minor ?? $data['price_minor'];
+        }
+
+        return $data;
     }
 }

@@ -20,6 +20,8 @@ A four-digit string allows `0000` through `9999`, including leading zeros. The c
 
 Products can be archived and restored via **Available in POS**. Categories, units, and suppliers can be deleted only when no product references them, including archived products. This protects existing references; reassign the product before deleting its old category, unit, or supplier. Supplier details are not exposed by the cashier catalog endpoint.
 
+**Product prices:** `retail_price_minor` is the regular shelf price and `price_minor` is the default POS sale price. Both are integer paisa. The price migration copies existing sale prices into the new retail field without changing sales or order snapshots. Older API clients can still send just `price_minor`: the server preserves an existing retail price or initializes it from the sale price for a new item.
+
 ## API and deployment
 
 - `GET /api/pos/auth/session` returns the current user (or null) and a CSRF token.

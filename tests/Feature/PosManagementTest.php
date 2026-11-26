@@ -261,6 +261,40 @@ class PosManagementTest extends TestCase
         $this->assertSame(1000, $two->fresh()->stock_milli);
     }
 
+    public function test_retail_price_is_independent_of_the_pos_sale_price(): void
+    {
+        $this->seed();
+        $this->actingAs($this->manager());
+        $sample = PosProduct::firstOrFail();
+        $this->assertSame($sample->price_minor, $sample->retail_price_minor);
+
+        $url = '/api/pos/management/products';
+        $body = ['name' => 'Price Test', 'category_id' => $sample->category_id,
+            'unit_id' => $sample->unit_id, 'retail_price_minor' => 20099, 'price_minor' => 14995];
+        $created = $this->postJson($url, $body)->assertCreated()
+            ->assertJsonPath('retail_price_minor', 20099)->assertJsonPath('price_minor', 14995)->json();
+        $url .= '/'.$created['id'];
+        $body['internal_code'] = $created['internal_code'];
+
+        $this->putJson($url, array_replace($body, ['retail_price_minor' => -1]))
+            ->assertJsonValidationErrors('retail_price_minor');
+        $this->putJson($url, array_replace($body, ['price_minor' => 12.5]))
+            ->assertJsonValidationErrors('price_minor');
+        $body['retail_price_minor'] = 21900;
+        $this->putJson($url, $body)->assertOk()
+            ->assertJsonPath('retail_price_minor', 21900)->assertJsonPath('price_minor', 14995);
+
+        // An old client changing the sale price must not erase the retail price.
+        unset($body['retail_price_minor']);
+        $body['price_minor'] = 13995;
+        $this->putJson($url, $body)->assertOk()
+            ->assertJsonPath('retail_price_minor', 21900)->assertJsonPath('price_minor', 13995);
+
+        $catalog = $this->getJson('/api/pos/catalog')->assertOk()->json('products');
+        $product = collect($catalog)->firstWhere('sku', $created['sku']);
+        $this->assertSame(13995, $product['price_minor']);
+    }
+
     public function test_crud_code_generation_and_conflict_protection(): void
     {
         $this->actingAs($this->manager());

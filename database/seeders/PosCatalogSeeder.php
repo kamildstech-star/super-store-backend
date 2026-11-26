@@ -65,7 +65,7 @@ class PosCatalogSeeder extends Seeder
                     'sku' => $sku, 'internal_code' => app(PosProductCode::class)->next(),
                     'barcode' => sprintf('DEMO-%04d', $order + 1),
                     'name' => $name, 'category_id' => $categories[$category], 'unit_id' => $units[$unit],
-                    'price_minor' => $rupees * 100, 'is_active' => true, 'sort_order' => $order,
+                    'price_minor' => $rupees * 100, 'retail_price_minor' => $rupees * 100, 'is_active' => true, 'sort_order' => $order,
                     'art_shape' => $shape, 'art_ink' => $ink, 'art_tone' => $tone, 'art_label' => $label,
                 ]);
             }
