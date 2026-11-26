@@ -47,3 +47,9 @@ Run `php artisan migrate` before using the matching frontend. The checkout migra
 - `GET /api/pos/orders/{id}` has the saved line, payment, finalization, cashier, and tender details used by the receipt. `change_minor` is computed from recorded tender and the immutable finalized total.
 - Replay the exact submission on a timeout, with the same `request_id`, `checkout_id`, or draft PUT `update_id`. Replaying a successful checkout does not deduct stock again. Reusing a key with different contents returns a conflict; check Orders before creating a new sale.
 - These endpoints are for the single-store MVP. Till reconciliation, returns/refunds, reports, and separate manager-only permissions are not in this release.
+
+## Daily Sales Report
+
+`GET /api/pos/reports/sales` is authenticated. Use `period=today` (default), `period=yesterday`, or `period=custom&from=YYYY-MM-DD&to=YYYY-MM-DD` (inclusive, up to 366 days), optionally with `cashier_id`, `page` and `per_page`. Dates use Pakistan time; sales are matched by finalization time and assigned to the finalizing cashier, not the draft creator.
+
+Totals cover the full selection, not just the current detail page. Gross uses the stored line quantities and pre-discount unit prices; discounts are gross less finalized order totals. Amounts are strings in PKR minor units to preserve integer precision. The payment breakdown retains historical payment methods. Drafts are excluded. Refunds and net sales after refunds are returned as `null` because this release does not record refunds. The report does not require a new migration.

@@ -5,6 +5,7 @@ use App\Http\Controllers\PosCatalogController;
 use App\Http\Controllers\PosManagementController;
 use App\Http\Controllers\PosInventoryController;
 use App\Http\Controllers\PosOrderController;
+use App\Http\Controllers\PosSalesReportController;
 use App\Http\Controllers\PosProductImageController;
 use Illuminate\Support\Facades\Route;
 
@@ -22,6 +23,7 @@ Route::prefix('api/pos')->group(function (): void {
         Route::post('/auth/logout', [PosAuthController::class, 'logout']);
         Route::get('/catalog', PosCatalogController::class)->name('pos.catalog');
         Route::get('/inventory', [PosInventoryController::class, 'index']);
+        Route::get('/reports/sales', PosSalesReportController::class);
         Route::get('/inventory/{product}/movements', [PosInventoryController::class, 'movements'])->whereNumber('product');
         Route::post('/inventory/{product}/movements', [PosInventoryController::class, 'record'])->whereNumber('product');
         Route::put('/inventory/{product}/threshold', [PosInventoryController::class, 'threshold'])->whereNumber('product');

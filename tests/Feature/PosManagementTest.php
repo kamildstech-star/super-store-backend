@@ -301,6 +301,57 @@ class PosManagementTest extends TestCase
         $this->assertDatabaseCount('pos_stock_movements', 2);
     }
 
+    public function test_sales_report_uses_pakistan_day_finalized_cashier_and_complete_totals(): void
+    {
+        $this->travelTo(\Illuminate\Support\Carbon::parse('2026-11-26 12:00:00', 'UTC'));
+        $creator = $this->manager();
+        $finalizer = User::create(['name' => 'Counter Two', 'email' => 'counter2@example.test', 'password' => 'test-password']);
+        $path = '/api/pos/reports/sales';
+        $this->getJson($path)->assertUnauthorized();
+        $this->actingAs($creator);
+
+        $record = function (?string $at, string $method, int $paid, int $price, float $qty, User $actor) use ($creator) {
+            $order = \App\Models\PosOrder::create([
+                'user_id' => $creator->id, 'request_id' => (string) \Illuminate\Support\Str::uuid(),
+                'cashier' => $creator->name, 'line_count' => 1, 'total_minor' => $paid,
+                'lines' => [['sku' => 'HISTORICAL', 'name' => 'Old product', 'unit' => 'kg', 'qty' => $qty,
+                    'price_minor' => $price, 'discount' => $qty === 1.5 ? 50 : 0, 'total_minor' => $paid]],
+            ]);
+            $order->forceFill(['created_at' => '2026-11-01 10:00:00', 'finalized_at' => $at,
+                'finalized_by' => $at ? $actor->id : null, 'finalized_cashier' => $at ? $actor->name : null,
+                'payment_method' => $at ? $method : null])->save();
+
+            return $order;
+        };
+        $record(null, 'cash', 1000, 1000, 1, $creator);
+        $prior = $record('2026-11-25 18:59:59', 'cash', 900, 900, 1, $creator);
+        $cash = $record('2026-11-25 19:00:00', 'cash', 14999, 19999, 1.5, $finalizer);
+        $card = $record('2026-11-26 11:00:00', 'card', 6000, 6000, 1, $creator);
+        $transfer = $record('2026-11-26 18:59:59', 'bank_transfer', 1100, 1100, 1, $creator);
+        $record('2026-11-26 19:00:00', 'cash', 20000, 20000, 1, $creator);
+
+        $this->getJson($path.'?per_page=1')->assertOk()->assertHeader('Cache-Control', 'no-store, private')
+            ->assertJsonPath('range', ['from' => '2026-11-26', 'to' => '2026-11-26', 'timezone' => 'Asia/Karachi'])
+            ->assertJsonPath('summary.gross_minor', '37099')->assertJsonPath('summary.discount_minor', '15000')
+            ->assertJsonPath('summary.sales_after_discount_minor', '22099')->assertJsonPath('summary.order_count', 3)
+            ->assertJsonPath('summary.refunds_minor', null)->assertJsonPath('summary.net_sales_minor', null)
+            ->assertJsonPath('data.0.id', $transfer->id)->assertJsonPath('meta.last_page', 3)
+            ->assertJsonPath('payments.0.method', 'bank_transfer')->assertJsonPath('payments.0.total_minor', '1100')
+            ->assertJsonPath('payments.1.method', 'card')->assertJsonPath('payments.1.total_minor', '6000')
+            ->assertJsonPath('payments.2.method', 'cash')->assertJsonPath('payments.2.total_minor', '14999');
+        $this->getJson($path.'?page=2&per_page=1')->assertJsonPath('data.0.id', $card->id)
+            ->assertJsonPath('summary.sales_after_discount_minor', '22099');
+        $this->getJson($path.'?cashier_id='.$finalizer->id)->assertJsonCount(2, 'cashiers')
+            ->assertJsonPath('data.0.id', $cash->id)->assertJsonPath('data.0.cashier', 'Counter Two')
+            ->assertJsonPath('summary.sales_after_discount_minor', '14999')->assertJsonPath('summary.order_count', 1);
+        $this->getJson($path.'?period=yesterday')->assertJsonPath('data.0.id', $prior->id)
+            ->assertJsonPath('summary.sales_after_discount_minor', '900');
+        $this->getJson($path.'?period=custom&from=2026-11-25&to=2026-11-26')->assertJsonPath('summary.order_count', 4);
+        $this->getJson($path.'?period=custom&from=2026-11-01&to=2026-11-01')->assertJsonPath('summary.order_count', 0);
+        $this->getJson($path.'?period=custom&from=2026-11-26&to=2026-11-25')->assertJsonValidationErrors('to');
+        $this->getJson($path.'?period=custom&from=2025-01-01&to=2026-11-26')->assertJsonValidationErrors('to');
+    }
+
     public function test_non_cash_is_blocked_but_existing_receipts_can_still_be_read_and_retried(): void
     {
         $this->seed();
