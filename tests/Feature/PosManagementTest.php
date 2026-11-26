@@ -6,6 +6,8 @@ use App\Models\PosProduct;
 use App\Models\User;
 use Database\Seeders\PosDemoUserSeeder;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -259,6 +261,55 @@ class PosManagementTest extends TestCase
         $this->assertDatabaseCount('pos_orders', 2);
         $this->assertSame(1000, $one->fresh()->stock_milli);
         $this->assertSame(1000, $two->fresh()->stock_milli);
+    }
+
+    public function test_product_image_lifecycle_is_optional_authenticated_and_validated(): void
+    {
+        Storage::fake('local');
+        $this->seed();
+        $this->actingAs($this->manager());
+        $sample = PosProduct::firstOrFail();
+        $url = '/api/pos/management/products';
+        $body = ['name' => 'Photo Product', 'category_id' => $sample->category_id,
+            'unit_id' => $sample->unit_id, 'price_minor' => 14995, 'retail_price_minor' => 20099];
+        $pixels = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1ioAAAAASUVORK5CYII=');
+        $photo = fn () => UploadedFile::fake()->createWithContent('product.png', $pixels);
+
+        $this->post($url, $body + ['image' => UploadedFile::fake()->createWithContent(
+            'bad.png', '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>'
+        )], ['Accept' => 'application/json'])->assertJsonValidationErrors('image');
+        $this->post($url, $body + ['image' => $photo()->size(2049)], ['Accept' => 'application/json'])
+            ->assertJsonValidationErrors('image');
+        $this->assertSame([], Storage::disk('local')->allFiles());
+
+        $product = $this->post($url, $body + ['image' => $photo()], ['Accept' => 'application/json'])
+            ->assertCreated()->assertJsonMissingPath('image_path')->json();
+        $image = $product['image_url'];
+        $imagePath = 'pos-product-images/'.basename($image);
+        Storage::disk('local')->assertExists($imagePath);
+        $this->get($image)->assertOk()->assertHeader('Content-Type', 'image/png')
+            ->assertHeader('X-Content-Type-Options', 'nosniff')->assertHeader('Cache-Control', 'no-store, private');
+        $this->getJson('/api/pos/catalog')->assertJsonFragment(['image_url' => $image]);
+        $this->getJson($url.'?q=Photo')->assertJsonPath('data.0.image_url', $image);
+
+        $url .= '/'.$product['id'];
+        $body['internal_code'] = $product['internal_code'];
+        $this->putJson($url, $body)->assertOk()->assertJsonPath('image_url', $image);
+        $newImage = $this->post($url, $body + ['_method' => 'PUT', 'image' => $photo()], ['Accept' => 'application/json'])
+            ->assertOk()->json('image_url');
+        $this->assertNotSame($image, $newImage);
+        Storage::disk('local')->assertMissing($imagePath);
+        $newPath = 'pos-product-images/'.basename($newImage);
+        Storage::disk('local')->assertExists($newPath);
+        $this->get($image)->assertNotFound();
+
+        $this->putJson($url, $body + ['remove_image' => true])->assertOk()->assertJsonPath('image_url', null);
+        Storage::disk('local')->assertMissing($newPath);
+        $this->get($newImage)->assertNotFound();
+        $image = $this->post($url, $body + ['_method' => 'PUT', 'image' => $photo()], ['Accept' => 'application/json'])
+            ->assertOk()->json('image_url');
+        $this->postJson('/api/pos/auth/logout')->assertOk();
+        $this->get($image)->assertUnauthorized();
     }
 
     public function test_retail_price_is_independent_of_the_pos_sale_price(): void

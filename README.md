@@ -22,6 +22,8 @@ Products can be archived and restored via **Available in POS**. Categories, unit
 
 **Product prices:** `retail_price_minor` is the regular shelf price and `price_minor` is the default POS sale price. Both are integer paisa. The price migration copies existing sale prices into the new retail field without changing sales or order snapshots. Older API clients can still send just `price_minor`: the server preserves an existing retail price or initializes it from the sale price for a new item.
 
+**Product images:** Optional JPG, PNG or WebP, up to 2 MB and 4096 × 4096 px. Upload as multipart `image` with the normal product create request; for an edit with a file, send multipart POST with `_method=PUT`. To remove the image, send `remove_image: true` with the normal edit fields. Files live under `storage/app/private/pos-product-images`; Laravel must be able to write there. Back up this folder along with MySQL. Images are served through the authenticated POS API; no `storage:link` is needed. PHP must have Fileinfo enabled, with `upload_max_filesize` at least 2 MB and `post_max_size` larger than that.
+
 ## API and deployment
 
 - `GET /api/pos/auth/session` returns the current user (or null) and a CSRF token.

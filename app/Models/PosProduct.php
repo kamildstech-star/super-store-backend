@@ -8,9 +8,22 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class PosProduct extends Model
 {
     protected $fillable = [
-        'sku', 'internal_code', 'barcode', 'supplier_id', 'category_id', 'unit_id', 'name', 'price_minor', 'retail_price_minor', 'is_active',
+        'sku', 'internal_code', 'barcode', 'supplier_id', 'category_id', 'unit_id', 'name', 'price_minor', 'retail_price_minor', 'image_path', 'is_active',
         'sort_order', 'art_shape', 'art_ink', 'art_tone', 'art_label',
     ];
+
+    protected $hidden = ['image_path'];
+
+    protected $appends = ['image_url'];
+
+    public function getImageUrlAttribute(): ?string
+    {
+        $path = $this->attributes['image_path'] ?? null;
+
+        return $path && $this->exists ? route('pos.product-image', [
+            'product' => $this->getKey(), 'filename' => basename($path),
+        ], false) : null;
+    }
 
     protected function casts(): array
     {

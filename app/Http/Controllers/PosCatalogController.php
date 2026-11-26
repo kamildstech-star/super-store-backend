@@ -28,6 +28,7 @@ class PosCatalogController extends Controller
                 'unit' => $product->unit->code,
                 'price_minor' => $product->price_minor,
                 'stock_milli' => $product->stock_milli,
+                'image_url' => $product->image_url,
                 'art' => [
                     'shape' => $product->art_shape,
                     'ink' => $product->art_ink,

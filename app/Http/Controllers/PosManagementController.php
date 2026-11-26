@@ -8,6 +8,7 @@ use App\Models\PosSupplier;
 use App\Models\PosStockMovement;
 use App\Models\PosUnit;
 use App\Services\PosProductCode;
+use App\Services\PosProductImage;
 use App\Services\PosListing;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
@@ -18,6 +19,7 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class PosManagementController extends Controller
 {
@@ -75,27 +77,41 @@ class PosManagementController extends Controller
             $data += ['sort_order' => 0, 'icon' => 'grid', 'color' => '#785971'];
         }
 
-        for ($attempt = 0; $attempt < 6; $attempt++) {
-            if ($generated) {
-                $data['internal_code'] = $codes->next();
-            }
-            try {
-                return response()->json($type::create($data), 201);
-            } catch (UniqueConstraintViolationException $error) {
-                if (!$generated || PosProduct::where('barcode', $data['barcode'] ?? null)
-                    ->whereNotNull('barcode')->exists()) {
-                    throw ValidationException::withMessages(['record' => 'That code or barcode is already in use.']);
-                }
-            }
+        $uploaded = $resource === 'products' && $request->hasFile('image')
+            ? PosProductImage::save($request->file('image')) : null;
+        unset($data['image'], $data['remove_image']);
+        if ($uploaded) {
+            $data['image_path'] = $uploaded;
         }
 
-        throw ValidationException::withMessages(['internal_code' => 'Could not reserve a unique code. Try again.']);
+        try {
+            for ($attempt = 0; $attempt < 6; $attempt++) {
+                if ($generated) {
+                    $data['internal_code'] = $codes->next();
+                }
+                try {
+                    return response()->json($type::create($data), 201);
+                } catch (UniqueConstraintViolationException $error) {
+                    if (!$generated || PosProduct::where('barcode', $data['barcode'] ?? null)
+                        ->whereNotNull('barcode')->exists()) {
+                        throw ValidationException::withMessages(['record' => 'That code or barcode is already in use.']);
+                    }
+                }
+            }
+
+            throw ValidationException::withMessages(['internal_code' => 'Could not reserve a unique code. Try again.']);
+        } catch (Throwable $error) {
+            PosProductImage::remove($uploaded);
+
+            throw $error;
+        }
     }
 
     public function update(Request $request, string $resource, int $id): JsonResponse
     {
+        $uploaded = null;
         try {
-            return DB::transaction(function () use ($request, $resource, $id) {
+            [$record, $replaced] = DB::transaction(function () use ($request, $resource, $id, &$uploaded) {
                 $record = self::TYPES[$resource]::query()->lockForUpdate()->findOrFail($id);
                 $data = $this->validated($request, $resource, $record);
                 if ($resource === 'products' && (int) $data['unit_id'] !== (int) $record->unit_id
@@ -108,13 +124,35 @@ class PosManagementController extends Controller
                         throw ValidationException::withMessages(['quantity_precision' => 'This unit has stock history. Create a new unit to use a different precision.']);
                     }
                 }
+                $replaced = null;
+                if ($resource === 'products') {
+                    if ($request->hasFile('image')) {
+                        $uploaded ??= PosProductImage::save($request->file('image'));
+                        $data['image_path'] = $uploaded;
+                    } elseif ($request->boolean('remove_image')) {
+                        $data['image_path'] = null;
+                    }
+                    if (array_key_exists('image_path', $data)) {
+                        $replaced = $record->image_path;
+                    }
+                    unset($data['image'], $data['remove_image']);
+                }
                 $record->update($data);
 
-                return response()->json($record->refresh());
+                return [$record, $replaced];
             }, 3);
-        } catch (UniqueConstraintViolationException $error) {
-            throw ValidationException::withMessages(['record' => 'That code or barcode is already in use.']);
+        } catch (Throwable $error) {
+            PosProductImage::remove($uploaded);
+            if ($error instanceof UniqueConstraintViolationException) {
+                throw ValidationException::withMessages(['record' => 'That code or barcode is already in use.']);
+            }
+
+            throw $error;
         }
+
+        PosProductImage::remove($replaced);
+
+        return response()->json($record->refresh());
     }
 
     public function destroy(string $resource, int $id): JsonResponse
@@ -165,6 +203,8 @@ class PosManagementController extends Controller
                 'barcode' => ['nullable', 'string', 'regex:/^[A-Z0-9._-]{1,48}$/D', $unique('barcode')],
                 'price_minor' => ['required', 'integer', 'between:0,99999999'],
                 'retail_price_minor' => ['sometimes', 'required', 'integer', 'between:0,99999999'],
+                'image' => ['sometimes', 'required', 'file', 'mimes:jpg,jpeg,png,webp', 'max:2048', 'dimensions:max_width=4096,max_height=4096'],
+                'remove_image' => ['sometimes', 'boolean'],
                 'category_id' => ['required', 'integer', 'exists:pos_categories,id'],
                 'unit_id' => ['required', 'integer', 'exists:pos_units,id'],
                 'supplier_id' => ['nullable', 'integer', 'exists:pos_suppliers,id'],

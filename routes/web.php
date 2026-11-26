@@ -5,6 +5,7 @@ use App\Http\Controllers\PosCatalogController;
 use App\Http\Controllers\PosManagementController;
 use App\Http\Controllers\PosInventoryController;
 use App\Http\Controllers\PosOrderController;
+use App\Http\Controllers\PosProductImageController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => response()->json(['service' => 'Super Store POS API']));
@@ -12,6 +13,10 @@ Route::get('/', fn () => response()->json(['service' => 'Super Store POS API']))
 Route::prefix('api/pos')->group(function (): void {
     Route::get('/auth/session', [PosAuthController::class, 'session']);
     Route::post('/auth/login', [PosAuthController::class, 'login'])->middleware('throttle:10,1');
+
+    Route::get('/product-images/{product}/{filename}', PosProductImageController::class)
+        ->whereNumber('product')->where('filename', '[A-Za-z0-9]{40}\.(?:jpe?g|png|webp)')
+        ->middleware(['auth', 'throttle:300,1'])->name('pos.product-image');
 
     Route::middleware(['auth', 'throttle:120,1'])->group(function (): void {
         Route::post('/auth/logout', [PosAuthController::class, 'logout']);
