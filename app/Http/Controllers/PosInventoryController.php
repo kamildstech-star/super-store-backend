@@ -17,12 +17,15 @@ class PosInventoryController extends Controller
     public function index(Request $request): JsonResponse
     {
         $filters = PosListing::filters($request);
-        $request->validate(['low_stock' => ['sometimes', 'boolean']]);
-        $products = PosProduct::where('is_active', true)->with('unit:id,code,quantity_precision')
-            ->select(['id', 'sku', 'name', 'internal_code', 'barcode', 'unit_id', 'supplier_id', 'stock_milli', 'low_stock_milli'])
+        $request->validate(['low_stock' => ['sometimes', 'boolean'], 'status' => ['sometimes', 'in:active,archived']]);
+        $products = PosProduct::with('unit:id,code,quantity_precision')
+            ->select(['id', 'sku', 'name', 'internal_code', 'barcode', 'unit_id', 'supplier_id', 'stock_milli', 'low_stock_milli', 'is_active'])
             ->orderBy('name')->orderBy('id');
         if (($term = $filters['q'] ?? '') !== '') {
             $products->where(fn ($query) => PosListing::whereContains($query, ['name', 'sku', 'internal_code', 'barcode'], $term));
+        }
+        if ($request->filled('status')) {
+            $products->where('is_active', $request->input('status') === 'active');
         }
         if ($request->boolean('low_stock')) {
             $products->whereColumn('stock_milli', '<=', 'low_stock_milli');
@@ -54,12 +57,15 @@ class PosInventoryController extends Controller
         }
 
         return DB::transaction(function () use ($request, $product, $body, $type, $delta) {
-            $item = PosProduct::where('is_active', true)->lockForUpdate()->findOrFail($product);
+            $item = PosProduct::lockForUpdate()->findOrFail($product);
             $existing = PosStockMovement::where('product_id', $product)->where('request_id', $body['request_id'])->first();
             if ($existing) {
                 abort_unless($existing->user_id === $request->user()->id, 409);
 
                 return response()->json($existing);
+            }
+            if (!$item->is_active && !($type === 'damage' || ($type === 'adjustment' && $delta < 0))) {
+                throw ValidationException::withMessages(['type' => 'Archived products only allow stock reductions. Reactivate the product before adding stock.']);
             }
             if ($type === 'opening' && PosStockMovement::where('product_id', $product)->exists()) {
                 throw ValidationException::withMessages(['type' => 'Opening stock is only for the first movement. Use an adjustment instead.']);

@@ -14,6 +14,7 @@ class PosAuthController extends Controller
         return response()->json([
             'user' => $request->user()?->only(['name', 'email']),
             'csrf_token' => $request->session()->token(),
+            'cart_scope' => $request->user() ? hash('sha256', 'pos-cart:'.$request->session()->token()) : null,
         ])->header('Cache-Control', 'no-store');
     }
 

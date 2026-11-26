@@ -41,13 +41,18 @@ class PosManagementTest extends TestCase
         $this->get('/api/pos/catalog')->assertUnauthorized();
         $this->postJson('/api/pos/management/suppliers', ['name' => 'Blocked'])->assertUnauthorized();
         $this->postJson('/api/pos/auth/login', ['email' => 'manager@example.test', 'password' => 'wrong'])->assertUnprocessable();
-        $this->postJson('/api/pos/auth/login', ['email' => 'MANAGER@example.test', 'password' => 'test-only-password'])
-            ->assertOk()->assertJsonPath('user.name', 'POS Manager')->assertJsonStructure(['csrf_token']);
+        $login = $this->postJson('/api/pos/auth/login', ['email' => 'MANAGER@example.test', 'password' => 'test-only-password'])
+            ->assertOk()->assertJsonPath('user.name', 'POS Manager')->assertJsonStructure(['csrf_token', 'cart_scope']);
+        $scope = $login->json('cart_scope');
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{64}$/', $scope);
+        $this->assertNotSame($login->json('csrf_token'), $scope);
         $this->getJson('/api/pos/management/products')->assertOk();
-        $this->getJson('/api/pos/auth/session')->assertJsonPath('user.email', 'manager@example.test');
-        $this->postJson('/api/pos/auth/logout')->assertOk()->assertJsonPath('user', null);
+        $this->getJson('/api/pos/auth/session')->assertJsonPath('user.email', 'manager@example.test')->assertJsonPath('cart_scope', $scope);
+        $this->postJson('/api/pos/auth/logout')->assertOk()->assertJsonPath('user', null)->assertJsonPath('cart_scope', null);
         $this->getJson('/api/pos/catalog')->assertUnauthorized();
         $this->postJson('/register', [])->assertNotFound();
+        $loginAgain = $this->postJson('/api/pos/auth/login', ['email' => 'manager@example.test', 'password' => 'test-only-password'])->assertOk();
+        $this->assertNotSame($scope, $loginAgain->json('cart_scope'));
     }
 
     public function test_demo_account_is_opt_in_local_only_and_keeps_an_existing_password(): void
@@ -218,6 +223,33 @@ class PosManagementTest extends TestCase
         $this->getJson($base.'/movements?per_page=2')->assertJsonPath('meta.total', 4)
             ->assertJsonPath('data.0.actor', 'POS Manager')->assertJsonPath('data.0.type', 'damage');
         $this->deleteJson('/api/pos/management/suppliers/'.$supplier)->assertConflict();
+    }
+
+    public function test_archived_inventory_is_visible_and_stock_can_only_be_reduced(): void
+    {
+        $this->seed();
+        $this->actingAs($this->manager());
+        $product = PosProduct::where('sku', 'MIN-01')->firstOrFail();
+        $base = '/api/pos/inventory/'.$product->id;
+        $move = fn (array $body) => $this->postJson($base.'/movements', $body + [
+            'request_id' => (string) \Illuminate\Support\Str::uuid(), 'reason' => 'Stock reconciliation',
+        ]);
+        $move(['type' => 'opening', 'quantity' => 3])->assertCreated();
+        $this->deleteJson('/api/pos/management/products/'.$product->id)->assertNoContent();
+
+        $this->getJson('/api/pos/inventory?q=MIN-01&per_page=1')
+            ->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.stock_milli', 3000)->assertJsonPath('data.0.is_active', false);
+        $this->getJson('/api/pos/inventory?q=MIN-01&status=active')->assertJsonPath('meta.total', 0);
+        $this->getJson('/api/pos/inventory?q=MIN-01&status=archived')->assertJsonPath('meta.total', 1);
+        $this->getJson('/api/pos/inventory?status=unknown')->assertJsonValidationErrors('status');
+        $this->assertNotContains('MIN-01', array_column($this->getJson('/api/pos/catalog')->assertOk()->json('products'), 'sku'));
+
+        $move(['type' => 'adjustment', 'quantity' => 1])->assertJsonValidationErrors('type');
+        $move(['type' => 'damage', 'quantity' => 4])->assertJsonValidationErrors('quantity');
+        $move(['type' => 'adjustment', 'quantity' => -2])->assertCreated()->assertJsonPath('balance_milli', 1000);
+        $move(['type' => 'damage', 'quantity' => 1])->assertCreated()->assertJsonPath('balance_milli', 0);
+        $this->getJson('/api/pos/inventory?q=MIN-01&status=archived&low_stock=1')->assertJsonPath('data.0.stock_milli', 0);
+        $this->getJson($base.'/movements')->assertJsonPath('meta.total', 3);
     }
 
     public function test_checkout_is_atomic_idempotent_and_locks_finalized_orders(): void
