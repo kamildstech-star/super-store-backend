@@ -301,6 +301,39 @@ class PosManagementTest extends TestCase
         $this->assertDatabaseCount('pos_stock_movements', 2);
     }
 
+    public function test_non_cash_is_blocked_but_existing_receipts_can_still_be_read_and_retried(): void
+    {
+        $this->seed();
+        $cashier = $this->manager();
+        $this->actingAs($cashier);
+        PosProduct::where('sku', 'MIN-01')->update(['stock_milli' => 3000]);
+        $uuid = fn () => (string) \Illuminate\Support\Str::uuid();
+        $cart = ['request_id' => $uuid(), 'lines' => [['sku' => 'MIN-01', 'qty' => 1, 'price_minor' => 6000, 'discount' => 0]]];
+        $draft = $this->postJson('/api/pos/orders', $cart)->assertCreated()->json();
+        $path = '/api/pos/orders/'.$draft['id'];
+        foreach (['card', 'bank_transfer'] as $method) {
+            $this->postJson('/api/pos/checkout', array_replace($cart, ['request_id' => $uuid(), 'payment_method' => $method]))
+                ->assertUnprocessable()->assertJsonValidationErrors('payment_method');
+            $this->postJson($path.'/checkout', [
+                'checkout_id' => $uuid(), 'revision' => $draft['revision'], 'lines' => $cart['lines'], 'payment_method' => $method,
+            ])->assertUnprocessable()->assertJsonValidationErrors('payment_method');
+        }
+        $this->getJson($path)->assertJsonPath('finalized_at', null);
+        $this->assertDatabaseCount('pos_orders', 1);
+        $this->assertDatabaseCount('pos_stock_movements', 0);
+
+        $requestId = $uuid();
+        $historic = \App\Models\PosOrder::create([
+            'user_id' => $cashier->id, 'request_id' => $requestId, 'cashier' => $cashier->name,
+            'line_count' => 1, 'total_minor' => 6000, 'lines' => $draft['lines'],
+        ]);
+        $historic->forceFill(['finalized_at' => now(), 'checkout_id' => $requestId, 'payment_method' => 'card'])->save();
+        $this->getJson('/api/pos/orders/'.$historic->id)->assertJsonPath('payment_method', 'card')->assertJsonPath('cash_received_minor', null);
+        $this->postJson('/api/pos/checkout', array_replace($cart, ['request_id' => $requestId, 'payment_method' => 'card']))
+            ->assertOk()->assertJsonPath('id', $historic->id)->assertJsonPath('payment_method', 'card');
+        $this->assertDatabaseCount('pos_stock_movements', 0);
+    }
+
     public function test_checkout_is_atomic_idempotent_and_locks_finalized_orders(): void
     {
         $this->seed();
@@ -324,7 +357,7 @@ class PosManagementTest extends TestCase
         $this->postJson($path.'/checkout', $fields)->assertJsonValidationErrors('quantity');
         $this->assertSame(5000, $one->fresh()->stock_milli);
         $this->assertDatabaseMissing('pos_stock_movements', ['type' => 'sale']);
-        $direct = array_replace($body, ['request_id' => (string) \Illuminate\Support\Str::uuid(), 'payment_method' => 'card']);
+        $direct = array_replace($body, ['request_id' => (string) \Illuminate\Support\Str::uuid(), 'payment_method' => 'cash', 'cash_received_minor' => 25000]);
         $this->postJson('/api/pos/checkout', $direct)->assertJsonValidationErrors('quantity');
         $this->assertDatabaseCount('pos_orders', 1);
 
@@ -337,7 +370,7 @@ class PosManagementTest extends TestCase
         $this->assertDatabaseHas('pos_stock_movements', ['order_id' => $draft['id'], 'product_id' => $one->id, 'delta_milli' => -2000]);
         $this->assertSame(3000, $one->fresh()->stock_milli);
         $this->assertSame(2000, $two->fresh()->stock_milli);
-        $this->postJson('/api/pos/checkout', $direct)->assertCreated()->assertJsonPath('payment_method', 'card');
+        $this->postJson('/api/pos/checkout', $direct)->assertCreated()->assertJsonPath('payment_method', 'cash');
         $this->postJson('/api/pos/checkout', $direct)->assertOk();
         $this->assertDatabaseCount('pos_orders', 2);
         $this->assertSame(1000, $one->fresh()->stock_milli);

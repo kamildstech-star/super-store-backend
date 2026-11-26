@@ -111,13 +111,9 @@ class PosOrderController extends Controller
                 User::query()->lockForUpdate()->findOrFail($user->id);
                 $identity = ['user_id' => $user->id, 'request_id' => $body['request_id']];
                 $saved = PosOrder::where($identity)->lockForUpdate()->first();
-                $created = $saved === null;
-                if ($created) {
-                    $saved = PosOrder::create($identity + ['cashier' => $user->name] + $this->orderAttributes($body));
-                }
             }
 
-            if ($saved->finalized_at) {
+            if ($saved?->finalized_at) {
                 // Older receipts have no fingerprint or tender; do not invent either.
                 $original = $saved->checkout_fingerprint ?? $this->fingerprint('checkout', $saved->toArray() + [
                     'revision' => $body['revision'] ?? null,
@@ -126,16 +122,21 @@ class PosOrderController extends Controller
                     ? response()->json($this->detail($saved))
                     : $this->submissionConflict($saved);
             }
+            // Accept only exact replays of old non-cash receipts, never a new non-cash sale.
+            if ($body['payment_method'] !== 'cash') {
+                throw ValidationException::withMessages(['payment_method' => 'Only cash is accepted for new sales.']);
+            }
             if ($order !== null && ! hash_equals($this->revision($saved), $body['revision'])) {
                 return response()->json(['message' => 'This order was changed elsewhere. Reopen it before finalizing.'], 409);
             }
-            if ($order === null && ! $created) {
+            if ($order === null && $saved !== null) {
                 return $this->submissionConflict($saved);
             }
 
+            $saved ??= PosOrder::create($identity + ['cashier' => $user->name] + $this->orderAttributes($body));
             $attributes = $order === null ? ['lines' => $saved->lines, 'total_minor' => $saved->total_minor] : $this->orderAttributes($body, $saved->lines);
-            $received = isset($body['cash_received_minor']) ? (int) $body['cash_received_minor'] : null;
-            if ($received !== null && $received < $attributes['total_minor']) {
+            $received = (int) $body['cash_received_minor'];
+            if ($received < $attributes['total_minor']) {
                 throw ValidationException::withMessages(['cash_received_minor' => 'Cash received must cover the sale total.']);
             }
             $products = PosProduct::with('unit')->whereIn('sku', array_column($attributes['lines'], 'sku'))
