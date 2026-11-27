@@ -13,6 +13,11 @@ class PosStockMovement extends Model
 
     protected $hidden = ['user_id', 'request_id', 'updated_at'];
 
+    public function order(): \Illuminate\Database\Eloquent\Relations\BelongsTo
+    {
+        return $this->belongsTo(PosOrder::class);
+    }
+
     protected function casts(): array
     {
         return ['delta_milli' => 'integer', 'balance_milli' => 'integer'];

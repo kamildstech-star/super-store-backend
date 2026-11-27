@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\PosOrder;
 use App\Models\PosRefund;
 use App\Services\PosListing;
+use App\Services\PosOrderNumber;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -23,7 +24,7 @@ class PosSalesReportController extends Controller
             'kind' => ['sometimes', 'in:sales,refunds'],
         ]);
 
-        $zone = 'Asia/Karachi';
+        $zone = PosOrderNumber::TIMEZONE;
         $today = CarbonImmutable::today($zone);
         $period = $dates['period'] ?? 'today';
         $start = match ($period) {
@@ -48,7 +49,7 @@ class PosSalesReportController extends Controller
             ->select([
                 'pos_orders.id', 'pos_orders.finalized_at', 'pos_orders.finalized_by', 'pos_orders.finalized_cashier',
                 'pos_orders.customer', 'pos_orders.line_count', 'pos_orders.total_minor', 'pos_orders.payment_method',
-                'pos_orders.lines', 'finalizer.name as cashier_name',
+                'pos_orders.lines', 'pos_orders.business_date', 'pos_orders.daily_number', 'finalizer.name as cashier_name',
             ]);
 
         $kind = $dates['kind'] ?? 'sales';
@@ -79,7 +80,7 @@ class PosSalesReportController extends Controller
             $payments[$method]['order_count']++;
             if ($kind === 'sales' && $count >= $offset && count($rows) < $size) {
                 $rows[] = [
-                    'id' => $order->id,
+                    'id' => $order->id, 'reference' => $order->reference, 'business_date' => $order->business_date,
                     'finalized_at' => $order->finalized_at,
                     'cashier' => $order->finalized_cashier ?: $order->cashier_name,
                     'customer' => $order->customer,
@@ -93,9 +94,13 @@ class PosSalesReportController extends Controller
 
         // Refunds belong to the posting date and posting cashier, independently of the original sale.
         $refunds = PosRefund::query()
-            ->where('posted_at', '>=', $start->utc())->where('posted_at', '<', $end->addDay()->utc())
-            ->orderByDesc('posted_at')->orderByDesc('id')
-            ->select(['id', 'posted_at', 'order_id', 'user_id', 'actor', 'total_minor']);
+            ->join('pos_orders as origin', 'origin.id', '=', 'pos_refunds.order_id')
+            ->where('pos_refunds.posted_at', '>=', $start->utc())->where('pos_refunds.posted_at', '<', $end->addDay()->utc())
+            ->orderByDesc('pos_refunds.posted_at')->orderByDesc('pos_refunds.id')
+            ->select([
+                'pos_refunds.id', 'pos_refunds.posted_at', 'pos_refunds.order_id', 'pos_refunds.user_id', 'pos_refunds.actor',
+                'pos_refunds.total_minor', 'origin.business_date', 'origin.daily_number',
+            ]);
         foreach ($refunds->cursor() as $refund) {
             $cashiers[$refund->user_id] ??= ['id' => (int) $refund->user_id, 'name' => $refund->actor];
             if ($cashierId !== null && (int) $refund->user_id !== $cashierId) {
@@ -105,6 +110,8 @@ class PosSalesReportController extends Controller
             if ($kind === 'refunds' && $refundCount >= $offset && count($rows) < $size) {
                 $rows[] = [
                     'id' => $refund->id, 'order_id' => $refund->order_id, 'posted_at' => $refund->posted_at,
+                    'order_reference' => PosOrderNumber::reference($refund->order_id, $refund->daily_number),
+                    'order_business_date' => $refund->business_date,
                     'cashier' => $refund->actor, 'total_minor' => (string) $refund->total_minor,
                 ];
             }

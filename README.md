@@ -64,3 +64,9 @@ Run `php artisan migrate` for migration `2026_11_27_000008`, then use the matchi
 - The drawer is a single shared register. Tracking starts when the first shift is opened; earlier sales/refunds stay in reports and are not backfilled into a drawer. After activation, new finalized cash sales and refunds must carry the active `cash_session_id`. A parked order joins the shift where it is finalized. A shift can span dates and staff logins.
 - Under `/api/pos/cash-drawer`, GET status and `/history` show current/closed balances, POST `/open` creates a shift, GET/POST `/{session}/movements` list/record manual cash in or out, and POST `/{session}/close` takes counted cash and the latest displayed `revision`. Write requests use UUID `request_id` and amounts in paisa. Cash sales contribute their final total, not tender. The close saves expected cash, counted cash and variance. A stale close requires recounting against the refreshed balance.
 - For uncertain writes, retry the **exact** request with the original ID. Confirm the receipt and check whether physical cash already changed hands before paying out again. The application records cash; it does not move money.
+
+### Daily order references
+
+Migration `2026_11_27_000009` adds the counter. A new order receives its number on its first successful Park, draft save or direct checkout. All cashiers share the sequence for the Pakistan calendar date, starting with `#0001`. Reopening, checkout of an older draft, and retries keep the original number and business date. Existing numbered receipts from before this migration keep their old ID-based labels. API routes and foreign keys still use the permanent order ID, not the displayed number.
+
+Orders can be searched by number across dates, or by date and number together, for example `2026-11-27 #0001`. The sales report still groups sales by finalization date. The order business date displayed alongside the reference is the date it was first saved.

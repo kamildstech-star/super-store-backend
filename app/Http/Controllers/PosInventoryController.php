@@ -38,7 +38,7 @@ class PosInventoryController extends Controller
     {
         PosProduct::findOrFail($product);
 
-        return PosListing::response(PosStockMovement::where('product_id', $product)->orderByDesc('id'), PosListing::filters($request));
+        return PosListing::response(PosStockMovement::with('order:id,business_date,daily_number')->where('product_id', $product)->orderByDesc('id'), PosListing::filters($request));
     }
 
     public function record(Request $request, int $product): JsonResponse

@@ -192,7 +192,7 @@ class PosManagementTest extends TestCase
         $id = $this->getJson('/api/pos/orders?page=2&per_page=1')->assertJsonPath('meta.page', 2)
             ->assertJsonPath('data.0.customer', 'First customer')->json('data.0.id');
         $this->getJson('/api/pos/orders?q=FIRST&per_page=1')->assertJsonPath('data.0.id', $id);
-        $this->getJson('/api/pos/orders?q='.urlencode('#'.str_pad((string) $id, 3, '0', STR_PAD_LEFT)))
+        $this->getJson('/api/pos/orders?q='.urlencode('#0001'))
             ->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.id', $id);
     }
 

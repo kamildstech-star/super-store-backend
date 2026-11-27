@@ -21,7 +21,7 @@ class PosRefundController extends Controller
         $this->requireCashSale($order);
         $page = PosRefund::query()->where('order_id', $order->id)->orderByDesc('id')->paginate(10);
 
-        return response()->json($page->through(fn (PosRefund $refund) => $refund->receipt()))->header('Cache-Control', 'no-store');
+        return response()->json($page->through(fn (PosRefund $refund) => $refund->receipt($order)))->header('Cache-Control', 'no-store');
     }
 
     public function show(PosRefund $refund): JsonResponse
@@ -33,7 +33,7 @@ class PosRefundController extends Controller
     {
         $this->requireCashSale($order);
 
-        return response()->json(['lines' => $this->available($order)])->header('Cache-Control', 'no-store');
+        return response()->json(['lines' => $this->available($order), 'order_reference' => $order->reference, 'order_business_date' => $order->business_date])->header('Cache-Control', 'no-store');
     }
 
     public function preview(Request $request, PosOrder $order): JsonResponse
@@ -60,7 +60,7 @@ class PosRefundController extends Controller
                     throw new ConflictHttpException('This refund reference was used for a different submission.');
                 }
 
-                return response()->json($past->receipt());
+                return response()->json($past->receipt($sale));
             }
             $this->requireCashSale($sale);
             PosCashDrawer::requireSession($drawer, $session);
@@ -81,12 +81,12 @@ class PosRefundController extends Controller
             foreach ($lines as $line) {
                 if ($line['restock']) {
                     $product = PosProduct::with('unit')->findOrFail($line['product_id']);
-                    PosInventory::move($product, $actor, 'return', $line['qty_milli'], 'Return #'.$refund->id.' for sale #'.$order, ['refund_id' => $refund->id]);
+                    PosInventory::move($product, $actor, 'return', $line['qty_milli'], 'Return #'.$refund->id.' for sale '.$sale->reference.($sale->business_date ? ' ('.$sale->business_date.')' : ''), ['refund_id' => $refund->id]);
                 }
             }
             PosCashDrawer::add($session, 'refunds_minor', (int) $quote['total_minor']);
 
-            return response()->json($refund->receipt(), 201);
+            return response()->json($refund->receipt($sale), 201);
         }, 3);
     }
 

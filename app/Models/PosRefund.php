@@ -17,8 +17,14 @@ class PosRefund extends Model
         return ['lines' => 'array', 'posted_at' => 'immutable_datetime'];
     }
 
-    public function receipt(): array
+    public function receipt(?PosOrder $order = null): array
     {
-        return array_replace($this->toArray(), ['total_minor' => (string) $this->total_minor]);
+        $order ??= PosOrder::query()->select(['id', 'business_date', 'daily_number'])->findOrFail($this->order_id);
+
+        return array_replace($this->toArray(), [
+            'total_minor' => (string) $this->total_minor,
+            'order_reference' => $order->reference,
+            'order_business_date' => $order->business_date,
+        ]);
     }
 }

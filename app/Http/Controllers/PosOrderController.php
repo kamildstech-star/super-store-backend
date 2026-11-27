@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\PosListing;
 use App\Services\PosCashDrawer;
 use App\Services\PosInventory;
+use App\Services\PosOrderNumber;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -21,14 +22,19 @@ class PosOrderController extends Controller
         $filters = PosListing::filters($request);
         $term = $filters['q'] ?? '';
         $orders = PosOrder::query()
-            ->select(['id', 'created_at', 'cashier', 'customer', 'line_count', 'total_minor', 'finalized_at', 'payment_method'])
+            ->select(['id', 'created_at', 'cashier', 'customer', 'line_count', 'total_minor', 'finalized_at', 'payment_method', 'business_date', 'daily_number'])
             ->orderByDesc('id');
         if ($term !== '') {
             $orders->where(function ($match) use ($term): void {
                 PosListing::whereContains($match, ['cashier', 'customer'], $term);
-                $number = ltrim($term, '#');
-                if (ctype_digit($number) && strlen($number) <= 18) {
-                    $match->orWhere('id', (int) $number);
+                if (preg_match('/^([0-9]{4}-[0-9]{2}-[0-9]{2})\s+#?([0-9]{1,18})$/D', $term, $reference)) {
+                    [$year, $month, $day] = array_map('intval', explode('-', $reference[1]));
+                    if (checkdate($month, $day, $year)) {
+                        $match->orWhere(fn ($byDay) => $byDay->where('business_date', $reference[1])->where('daily_number', (int) $reference[2]));
+                    }
+                } elseif (preg_match('/^(?:order\s*)?#?([0-9]{1,18})$/iD', $term, $reference)) {
+                    $match->orWhere('daily_number', (int) $reference[1])
+                        ->orWhere(fn ($legacy) => $legacy->whereNull('daily_number')->where('id', (int) $reference[1]));
                 }
                 if (in_array(strtolower($term), ['walk-in', 'walk in'], true)) {
                     $match->orWhereNull('customer');
@@ -61,6 +67,7 @@ class PosOrderController extends Controller
             }
 
             $order = new PosOrder($identity + ['cashier' => $request->user()->name] + $this->orderAttributes($body));
+            PosOrderNumber::assign($order);
             $order->forceFill(['request_fingerprint' => $fingerprint])->save();
 
             return response()->json($this->detail($order), 201);
@@ -137,7 +144,11 @@ class PosOrderController extends Controller
             }
 
             $cashSession = PosCashDrawer::requireSession($drawer, isset($body['cash_session_id']) ? (int) $body['cash_session_id'] : null);
-            $saved ??= PosOrder::create($identity + ['cashier' => $user->name] + $this->orderAttributes($body));
+            if ($saved === null) {
+                $saved = new PosOrder($identity + ['cashier' => $user->name] + $this->orderAttributes($body));
+                PosOrderNumber::assign($saved);
+                $saved->save();
+            }
             $attributes = $order === null ? ['lines' => $saved->lines, 'total_minor' => $saved->total_minor] : $this->orderAttributes($body, $saved->lines);
             $received = (int) $body['cash_received_minor'];
             if ($received < $attributes['total_minor']) {
@@ -167,7 +178,7 @@ class PosOrderController extends Controller
 
     private function submissionConflict(PosOrder $order): JsonResponse
     {
-        return response()->json(['message' => "Order #{$order->id} already has a different submission. Check it in Orders before retrying."], 409);
+        return response()->json(['message' => "Order {$order->reference} already has a different submission. Check it in Orders before retrying."], 409);
     }
 
     private function fingerprint(string $operation, array $body): string

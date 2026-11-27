@@ -51,6 +51,65 @@ class PosCashOperationsTest extends TestCase
         ], $quote['total_minor']];
     }
 
+    public function test_order_references_reset_at_pakistan_midnight_and_remain_stable(): void
+    {
+        $this->seed();
+        $first = $this->cashier();
+        $second = $this->cashier('other@example.test');
+        $product = PosProduct::where('sku', 'MIN-01')->firstOrFail();
+        $product->forceFill(['stock_milli' => 10000])->save();
+        $path = '/api/pos/orders';
+        $legacy = PosOrder::create([
+            'user_id' => $first->id, 'request_id' => (string) Str::uuid(), 'cashier' => $first->name,
+            'line_count' => 0, 'total_minor' => 0, 'lines' => [],
+        ]);
+        $this->actingAs($first)->getJson($path.'/'.$legacy->id)
+            ->assertJsonPath('reference', '#001')->assertJsonPath('business_date', null);
+
+        $this->travelTo(now()->parse('2026-11-27 18:59:59', 'UTC'));
+        $opened = $this->cashSale(10000);
+        $sale = $this->postJson('/api/pos/checkout', $opened)->assertCreated()
+            ->assertJsonPath('reference', '#0001')->assertJsonPath('daily_number', 1)
+            ->assertJsonPath('business_date', '2026-11-27')->json();
+        $park = ['request_id' => (string) Str::uuid(), 'lines' => $opened['lines']];
+        $draft = $this->actingAs($second)->postJson($path, $park)->assertCreated()
+            ->assertJsonPath('reference', '#0002')->assertJsonPath('business_date', '2026-11-27')->json();
+
+        $this->travelTo(now()->parse('2026-11-27 19:00:00', 'UTC'));
+        $this->actingAs($first)->postJson('/api/pos/checkout', $opened)->assertOk()
+            ->assertJsonPath('id', $sale['id'])->assertJsonPath('reference', '#0001')
+            ->assertJsonPath('business_date', '2026-11-27');
+        $this->actingAs($second)->postJson($path, $park)->assertOk()
+            ->assertJsonPath('id', $draft['id'])->assertJsonPath('reference', '#0002');
+
+        // Validation rolls back the order and its counter together.
+        $bad = $this->cashSale(10000);
+        $bad['cash_received_minor'] = 1;
+        $this->postJson('/api/pos/checkout', $bad)->assertUnprocessable();
+        $today = $this->postJson('/api/pos/checkout', $this->cashSale(10000))->assertCreated()
+            ->assertJsonPath('reference', '#0001')->assertJsonPath('business_date', '2026-11-28')->json();
+        $this->assertNotSame($sale['id'], $today['id']);
+        $checkout = $this->cashSale(10000) + ['checkout_id' => (string) Str::uuid(), 'revision' => $draft['revision']];
+        $this->postJson($path.'/'.$draft['id'].'/checkout', $checkout)->assertOk()
+            ->assertJsonPath('reference', '#0002')->assertJsonPath('business_date', '2026-11-27');
+        $this->postJson($path, ['request_id' => (string) Str::uuid(), 'lines' => $opened['lines']])
+            ->assertCreated()->assertJsonPath('reference', '#0002')->assertJsonPath('business_date', '2026-11-28');
+        $this->assertDatabaseHas('pos_order_counters', ['business_date' => '2026-11-27', 'last_number' => 2]);
+        $this->assertDatabaseHas('pos_order_counters', ['business_date' => '2026-11-28', 'last_number' => 2]);
+
+        $this->getJson($path.'?q='.urlencode('2026-11-28 #0001'))->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.id', $today['id']);
+        $this->getJson($path.'?q='.urlencode('Order#0001'))->assertJsonPath('meta.total', 3);
+        $this->getJson('/api/pos/reports/sales')->assertJsonPath('summary.order_count', 2)
+            ->assertJsonPath('data.1.reference', '#0002')->assertJsonPath('data.1.business_date', '2026-11-27');
+        [$refund] = $this->draftRefund($sale['id']);
+        $this->postJson($path.'/'.$sale['id'].'/refunds', $refund)->assertCreated()
+            ->assertJsonPath('order_reference', '#0001')->assertJsonPath('order_business_date', '2026-11-27');
+        $this->getJson('/api/pos/reports/sales?kind=refunds')->assertJsonPath('data.0.order_reference', '#0001')
+            ->assertJsonPath('data.0.order_business_date', '2026-11-27');
+        $this->getJson('/api/pos/inventory/'.$product->id.'/movements')->assertOk()
+            ->assertJsonPath('data.0.order.reference', '#0002')->assertJsonPath('data.0.order.business_date', '2026-11-27');
+    }
+
     public function test_discounted_refunds_with_cumulative_rounding_and_independent_reporting(): void
     {
         $this->seed();
