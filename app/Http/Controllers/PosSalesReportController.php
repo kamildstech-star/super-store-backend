@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\PosOrder;
+use App\Models\PosRefund;
 use App\Services\PosListing;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -19,6 +20,7 @@ class PosSalesReportController extends Controller
             'from' => ['required_if:period,custom', 'prohibited_unless:period,custom', 'date_format:Y-m-d'],
             'to' => ['required_if:period,custom', 'prohibited_unless:period,custom', 'date_format:Y-m-d', 'after_or_equal:from'],
             'cashier_id' => ['sometimes', 'integer', 'min:1'],
+            'kind' => ['sometimes', 'in:sales,refunds'],
         ]);
 
         $zone = 'Asia/Karachi';
@@ -49,7 +51,8 @@ class PosSalesReportController extends Controller
                 'pos_orders.lines', 'finalizer.name as cashier_name',
             ]);
 
-        $gross = $paid = $count = 0;
+        $kind = $dates['kind'] ?? 'sales';
+        $gross = $paid = $count = $refunded = $refundCount = 0;
         $payments = $cashiers = $rows = [];
         // Read the same finalized rows for summary, payment breakdown, and paginated detail.
         // Use immutable line snapshots; current prices/discounts must not change old reports.
@@ -74,7 +77,7 @@ class PosSalesReportController extends Controller
             $payments[$method] ??= ['method' => $method, 'total_minor' => 0, 'order_count' => 0];
             $payments[$method]['total_minor'] += $order->total_minor;
             $payments[$method]['order_count']++;
-            if ($count >= $offset && count($rows) < $size) {
+            if ($kind === 'sales' && $count >= $offset && count($rows) < $size) {
                 $rows[] = [
                     'id' => $order->id,
                     'finalized_at' => $order->finalized_at,
@@ -88,6 +91,27 @@ class PosSalesReportController extends Controller
             $count++;
         }
 
+        // Refunds belong to the posting date and posting cashier, independently of the original sale.
+        $refunds = PosRefund::query()
+            ->where('posted_at', '>=', $start->utc())->where('posted_at', '<', $end->addDay()->utc())
+            ->orderByDesc('posted_at')->orderByDesc('id')
+            ->select(['id', 'posted_at', 'order_id', 'user_id', 'actor', 'total_minor']);
+        foreach ($refunds->cursor() as $refund) {
+            $cashiers[$refund->user_id] ??= ['id' => (int) $refund->user_id, 'name' => $refund->actor];
+            if ($cashierId !== null && (int) $refund->user_id !== $cashierId) {
+                continue;
+            }
+            $refunded += (int) $refund->total_minor;
+            if ($kind === 'refunds' && $refundCount >= $offset && count($rows) < $size) {
+                $rows[] = [
+                    'id' => $refund->id, 'order_id' => $refund->order_id, 'posted_at' => $refund->posted_at,
+                    'cashier' => $refund->actor, 'total_minor' => (string) $refund->total_minor,
+                ];
+            }
+            $refundCount++;
+        }
+        $rowCount = $kind === 'refunds' ? $refundCount : $count;
+
         uasort($cashiers, static fn (array $a, array $b) => strnatcasecmp($a['name'], $b['name']) ?: ($a['id'] <=> $b['id']));
         ksort($payments);
         return response()->json([
@@ -96,8 +120,9 @@ class PosSalesReportController extends Controller
                 'gross_minor' => (string) $gross,
                 'discount_minor' => (string) ($gross - $paid),
                 'sales_after_discount_minor' => (string) $paid,
-                'refunds_minor' => null,
-                'net_sales_minor' => null,
+                'refunds_minor' => (string) $refunded,
+                'net_sales_minor' => (string) ($paid - $refunded),
+                'refund_count' => $refundCount,
                 'order_count' => $count,
             ],
             'payments' => array_values(array_map(static function (array $payment): array {
@@ -110,8 +135,8 @@ class PosSalesReportController extends Controller
             'meta' => [
                 'page' => $page,
                 'per_page' => $size,
-                'last_page' => max(1, (int) ceil($count / $size)),
-                'total' => $count,
+                'last_page' => max(1, (int) ceil($rowCount / $size)),
+                'total' => $rowCount,
                 'from' => $rows ? $offset + 1 : null,
                 'to' => $rows ? $offset + count($rows) : null,
             ],

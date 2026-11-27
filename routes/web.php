@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\PosAuthController;
+use App\Http\Controllers\PosCashDrawerController;
+use App\Http\Controllers\PosRefundController;
 use App\Http\Controllers\PosCatalogController;
 use App\Http\Controllers\PosManagementController;
 use App\Http\Controllers\PosInventoryController;
@@ -24,6 +26,17 @@ Route::prefix('api/pos')->group(function (): void {
         Route::get('/catalog', PosCatalogController::class)->name('pos.catalog');
         Route::get('/inventory', [PosInventoryController::class, 'index']);
         Route::get('/reports/sales', PosSalesReportController::class);
+        Route::get('/orders/{order}/return-options', [PosRefundController::class, 'options'])->whereNumber('order');
+        Route::get('/orders/{order}/refunds', [PosRefundController::class, 'index'])->whereNumber('order');
+        Route::post('/orders/{order}/refund-preview', [PosRefundController::class, 'preview'])->whereNumber('order');
+        Route::post('/orders/{order}/refunds', [PosRefundController::class, 'store'])->whereNumber('order');
+        Route::get('/refunds/{refund}', [PosRefundController::class, 'show'])->whereNumber('refund');
+        Route::get('/cash-drawer', [PosCashDrawerController::class, 'status']);
+        Route::get('/cash-drawer/history', [PosCashDrawerController::class, 'history']);
+        Route::post('/cash-drawer/open', [PosCashDrawerController::class, 'open']);
+        Route::get('/cash-drawer/{session}/movements', [PosCashDrawerController::class, 'movements'])->whereNumber('session');
+        Route::post('/cash-drawer/{session}/movements', [PosCashDrawerController::class, 'move'])->whereNumber('session');
+        Route::post('/cash-drawer/{session}/close', [PosCashDrawerController::class, 'close'])->whereNumber('session');
         Route::get('/inventory/{product}/movements', [PosInventoryController::class, 'movements'])->whereNumber('product');
         Route::post('/inventory/{product}/movements', [PosInventoryController::class, 'record'])->whereNumber('product');
         Route::put('/inventory/{product}/threshold', [PosInventoryController::class, 'threshold'])->whereNumber('product');

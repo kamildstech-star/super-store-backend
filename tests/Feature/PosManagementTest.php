@@ -334,7 +334,7 @@ class PosManagementTest extends TestCase
             ->assertJsonPath('range', ['from' => '2026-11-26', 'to' => '2026-11-26', 'timezone' => 'Asia/Karachi'])
             ->assertJsonPath('summary.gross_minor', '37099')->assertJsonPath('summary.discount_minor', '15000')
             ->assertJsonPath('summary.sales_after_discount_minor', '22099')->assertJsonPath('summary.order_count', 3)
-            ->assertJsonPath('summary.refunds_minor', null)->assertJsonPath('summary.net_sales_minor', null)
+            ->assertJsonPath('summary.refunds_minor', '0')->assertJsonPath('summary.net_sales_minor', '22099')
             ->assertJsonPath('data.0.id', $transfer->id)->assertJsonPath('meta.last_page', 3)
             ->assertJsonPath('payments.0.method', 'bank_transfer')->assertJsonPath('payments.0.total_minor', '1100')
             ->assertJsonPath('payments.1.method', 'card')->assertJsonPath('payments.1.total_minor', '6000')

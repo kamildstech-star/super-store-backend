@@ -6,6 +6,7 @@ use App\Models\PosOrder;
 use App\Models\PosProduct;
 use App\Models\User;
 use App\Services\PosListing;
+use App\Services\PosCashDrawer;
 use App\Services\PosInventory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -98,10 +99,12 @@ class PosOrderController extends Controller
     {
         $body = $request->validate([
             'payment_method' => ['required', 'in:cash,card,bank_transfer'],
+            'cash_session_id' => ['nullable', 'integer', 'min:1'],
             'cash_received_minor' => ['required_if:payment_method,cash', 'prohibited_unless:payment_method,cash', 'integer', 'between:0,9000000000000000'],
         ] + ($order === null ? ['request_id' => ['required', 'uuid']] : ['revision' => ['required', 'string', 'size:64'], 'checkout_id' => ['required', 'uuid']]) + $this->orderRules());
 
         return DB::transaction(function () use ($request, $order, $body): JsonResponse {
+            $drawer = PosCashDrawer::lock();
             $user = $request->user();
             $checkoutId = $body['checkout_id'] ?? $body['request_id'];
             $fingerprint = $this->fingerprint('checkout', $body);
@@ -133,6 +136,7 @@ class PosOrderController extends Controller
                 return $this->submissionConflict($saved);
             }
 
+            $cashSession = PosCashDrawer::requireSession($drawer, isset($body['cash_session_id']) ? (int) $body['cash_session_id'] : null);
             $saved ??= PosOrder::create($identity + ['cashier' => $user->name] + $this->orderAttributes($body));
             $attributes = $order === null ? ['lines' => $saved->lines, 'total_minor' => $saved->total_minor] : $this->orderAttributes($body, $saved->lines);
             $received = (int) $body['cash_received_minor'];
@@ -141,18 +145,21 @@ class PosOrderController extends Controller
             }
             $products = PosProduct::with('unit')->whereIn('sku', array_column($attributes['lines'], 'sku'))
                 ->where('is_active', true)->orderBy('id')->lockForUpdate()->get()->keyBy('sku');
-            foreach ($attributes['lines'] as $line) {
+            foreach ($attributes['lines'] as $index => $line) {
                 $product = $products->get($line['sku']);
                 if (! $product || $product->unit->code !== $line['unit']) {
                     throw ValidationException::withMessages(['lines' => "{$line['name']} is unavailable or its unit changed. Remove it and add the current item before finalizing."]);
                 }
+                $attributes['lines'][$index]['quantity_precision'] = $product->unit->quantity_precision;
                 PosInventory::move($product, $user, 'sale', -(int) round($line['qty'] * 1000), 'Finalized sale', ['order_id' => $saved->id]);
             }
 
             $saved->fill($attributes)->forceFill([
                 'finalized_at' => now(), 'checkout_id' => $checkoutId, 'payment_method' => $body['payment_method'], 'finalized_by' => $user->id,
-                'finalized_cashier' => $user->name, 'cash_received_minor' => $received, 'checkout_fingerprint' => $fingerprint,
+                'cash_session_id' => $cashSession, 'finalized_cashier' => $user->name, 'cash_received_minor' => $received, 'checkout_fingerprint' => $fingerprint,
             ])->save();
+
+            PosCashDrawer::add($cashSession, 'sales_minor', $saved->total_minor);
 
             return response()->json($this->detail($saved), $order === null ? 201 : 200);
         }, 3);
@@ -165,13 +172,19 @@ class PosOrderController extends Controller
 
     private function fingerprint(string $operation, array $body): string
     {
-        return hash('sha256', json_encode([
+        $submission = [
             $operation, $body['revision'] ?? null, $body['customer'] ?? null, $body['note'] ?? null,
             $body['payment_method'] ?? null, isset($body['cash_received_minor']) ? (int) $body['cash_received_minor'] : null,
             array_map(fn (array $line) => [
                 $line['sku'], (int) round($line['qty'] * 1000), (int) $line['price_minor'], (int) round($line['discount'] * 100),
             ], $body['lines']),
-        ], JSON_THROW_ON_ERROR));
+        ];
+        // Null must not alter fingerprints on orders finalized before drawer tracking.
+        if (isset($body['cash_session_id'])) {
+            $submission[] = (int) $body['cash_session_id'];
+        }
+
+        return hash('sha256', json_encode($submission, JSON_THROW_ON_ERROR));
     }
 
     private function detail(PosOrder $order): array
