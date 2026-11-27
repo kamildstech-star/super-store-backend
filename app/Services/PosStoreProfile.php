@@ -31,6 +31,7 @@ final class PosStoreProfile
 
         return self::branding($record) + [
             'revision' => (int) $record->revision,
+            'receipt_width_mm' => (int) $record->receipt_width_mm,
             'currency' => 'PKR',
             'timezone' => PosOrderNumber::TIMEZONE,
         ];

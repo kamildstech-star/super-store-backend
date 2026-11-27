@@ -45,7 +45,7 @@ class PosStoreSettingsTest extends TestCase
         $this->putJson(self::PATH, $this->settings(1, 'Unauthorized store'))->assertUnauthorized();
         $this->actingAs($this->operator())->getJson(self::PATH)->assertOk()
             ->assertJsonPath('name', 'Super Store')->assertJsonPath('revision', 1)->assertJsonPath('address', null)
-            ->assertJsonPath('currency', 'PKR')->assertJsonPath('timezone', 'Asia/Karachi');
+            ->assertJsonPath('receipt_width_mm', 80)->assertJsonPath('currency', 'PKR')->assertJsonPath('timezone', 'Asia/Karachi');
         $this->putJson(self::PATH, $this->settings(1, ''))->assertUnprocessable()->assertJsonValidationErrors('name');
         $this->putJson(self::PATH, $this->settings(1, "New\nline"))->assertUnprocessable()->assertJsonValidationErrors('name');
         $this->putJson(self::PATH, $this->settings(1, 'My store') + ['currency' => 'USD', 'timezone' => 'UTC'])
@@ -60,6 +60,22 @@ class PosStoreSettingsTest extends TestCase
         $cleared = ['revision' => 2, 'name' => 'My store', 'address' => null, 'phone' => null, 'receipt_footer' => null];
         $this->putJson(self::PATH, $cleared)->assertOk()->assertJsonPath('revision', 3)
             ->assertJsonPath('address', null)->assertJsonPath('phone', null)->assertJsonPath('receipt_footer', null);
+    }
+
+    public function test_receipt_width_is_a_store_setting_with_compatibility_and_conflict_protection(): void
+    {
+        $this->actingAs($this->operator());
+        $initial = $this->settings(1, 'Test shop');
+        $this->putJson(self::PATH, $initial + ['receipt_width_mm' => 72])->assertUnprocessable()
+            ->assertJsonValidationErrors('receipt_width_mm');
+        $response = $this->putJson(self::PATH, $initial + ['receipt_width_mm' => 58])->assertOk()
+            ->assertJsonPath('receipt_width_mm', 58)->assertJsonPath('revision', 2)->json();
+        $this->putJson(self::PATH, $initial + ['receipt_width_mm' => '58'])->assertOk()->assertExactJson($response);
+        $this->putJson(self::PATH, $initial + ['receipt_width_mm' => 80])->assertConflict();
+        $this->putJson(self::PATH, $this->settings(2, 'Renamed by older client'))->assertOk()
+            ->assertJsonPath('receipt_width_mm', 58)->assertJsonPath('revision', 3);
+        $this->putJson(self::PATH, $this->settings(3, 'Renamed by older client') + ['receipt_width_mm' => 80])
+            ->assertOk()->assertJsonPath('receipt_width_mm', 80)->assertJsonPath('revision', 4);
     }
 
     public function test_receipt_branding_is_captured_at_sale_and_refund_posting_and_preserved_on_reprint(): void
@@ -79,6 +95,7 @@ class PosStoreSettingsTest extends TestCase
             'lines' => [['sku' => 'MIN-01', 'qty' => 1, 'price_minor' => 6000, 'discount' => 0]],
         ];
         $posted = $this->postJson('/api/pos/checkout', $sale)->assertCreated()
+            ->assertJsonMissingPath('receipt_store.receipt_width_mm')
             ->assertJsonPath('receipt_store.name', 'Market One')->assertJsonPath('receipt_store.phone', '+92 300 555 0100')->json();
         $this->putJson(self::PATH, $this->settings(2, 'Market Two'))->assertOk();
         $this->getJson('/api/pos/orders/'.$old->id)->assertOk()->assertJsonPath('receipt_store', null);
@@ -90,7 +107,7 @@ class PosStoreSettingsTest extends TestCase
         $quote = $this->postJson($order.'/refund-preview', compact('lines'))->assertOk()->json('quote');
         $refundBody = ['lines' => $lines, 'request_id' => (string) Str::uuid(), 'reason' => 'Returned', 'quote' => $quote];
         $refund = $this->postJson($order.'/refunds', $refundBody)->assertCreated()
-            ->assertJsonPath('receipt_store.name', 'Market Two')->json();
+            ->assertJsonPath('receipt_store.name', 'Market Two')->assertJsonMissingPath('receipt_store.receipt_width_mm')->json();
         $this->putJson(self::PATH, $this->settings(3, 'Market Three'))->assertOk();
         $this->getJson('/api/pos/refunds/'.$refund['id'])->assertOk()->assertJsonPath('receipt_store.name', 'Market Two');
         $this->postJson($order.'/refunds', $refundBody)->assertOk()->assertJsonPath('receipt_store.name', 'Market Two');
