@@ -11,6 +11,7 @@ use App\Http\Controllers\PosPurchaseReceiptController;
 use App\Http\Controllers\PosSalesReportController;
 use App\Http\Controllers\PosSettingsController;
 use App\Http\Controllers\PosProductImageController;
+use App\Http\Controllers\PosSupplierPaymentController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', fn () => response()->json(['service' => 'Super Store POS API']));
@@ -32,6 +33,9 @@ Route::prefix('api/pos')->group(function (): void {
         Route::get('/purchases/products', [PosPurchaseReceiptController::class, 'products']);
         Route::get('/purchases/{receipt}', [PosPurchaseReceiptController::class, 'show'])->whereNumber('receipt');
         Route::post('/purchases', [PosPurchaseReceiptController::class, 'store']);
+        Route::get('/purchases/{receipt}/payments', [PosSupplierPaymentController::class, 'index'])->whereNumber('receipt');
+        Route::post('/purchases/{receipt}/payments', [PosSupplierPaymentController::class, 'store'])->whereNumber('receipt');
+        Route::get('/suppliers/{supplier}/payments', [PosSupplierPaymentController::class, 'supplier'])->whereNumber('supplier');
         Route::get('/inventory', [PosInventoryController::class, 'index']);
         Route::get('/inventory/alerts', [PosInventoryController::class, 'alerts']);
         Route::get('/reports/sales', PosSalesReportController::class);

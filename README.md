@@ -79,7 +79,7 @@ Run the additive `2026_11_27_000010` migration with `php artisan migrate`. Exist
 - `POST /api/pos/purchases` posts a supplier delivery. It accepts a UUID `request_id`, a `supplier_id`, optional `invoice_reference` and `note`, and 1–50 distinct product lines. Each line specifies `product_id`, the expected `unit_id`, positive `quantity_milli` (thousandths of the stock unit), and nonnegative `unit_cost_minor` (PKR paisa per stock unit). Quantities must match unit precision. Each line cost is rounded half up to the nearest paisa before totaling.
 - Posting adds all stock and corresponding inventory ledger entries in one transaction. A rejected receipt changes nothing. Retry an uncertain post with the original request ID and identical values; the same clerk gets the original receipt without adding stock again. Posted receipts are immutable and capture supplier, product, unit and staff at posting time.
 - `GET /api/pos/purchases` accepts `supplier_id`, `q` (receipt number, supplier name, or invoice), `page` and `per_page`. `GET /api/pos/purchases/{id}` returns saved lines and costs. `GET /api/pos/purchases/products` feeds the active product picker. Inventory history links new stock movements to the purchase receipt. The original single-product receiving API and its historical movements remain available.
-- Receiving records purchase costs and stock only. It does not change POS prices, update a cash drawer, pay a supplier, or calculate cost of goods sold.
+- Receiving records purchase costs and stock. Only a payment explicitly recorded from the cash drawer affects its balance. Receiving does not change POS prices or calculate cost of goods sold.
 
 ## Customers
 
@@ -98,3 +98,12 @@ Store Settings also returns `receipt_width_mm` (58 or 80; default 80). PUT accep
 ### Inventory alerts
 
 Authenticated `GET /api/pos/inventory/alerts` returns `alert_count` and `out_of_stock_count` for active products only, across all pages. The first count includes stock at or below its threshold and includes all out-of-stock products (even with a threshold of zero). The second count is the out-of-stock subset. The response is not cached. No migration is needed for this endpoint.
+
+### Supplier payments
+
+Run the additive supplier payment migration before using the matching frontend. A new purchase receipt tracks its explicit payment balance; an older receipt has unknown payment status and is excluded from supplier payable totals. Do not assume those receipts are unpaid or paid.
+
+- `POST /api/pos/purchases` may include `payment` with `amount_minor`, `source` (external or drawer), optional `note` and `cash_session_id` for drawer payments. Stock, receipt and initial payment commit together.
+- `GET/POST /api/pos/purchases/{receipt}/payments` lists or records installments. POST also requires an original UUID `request_id`. Amounts are positive integer paisa and cannot exceed the outstanding balance.
+- `GET /api/pos/suppliers/{supplier}/payments` returns tracked cost/paid/balance totals, the count of untracked older receipts, and paginated payment history. Supplier lists show tracked balances.
+- Drawer payments require the same active shift and enough expected cash. They create a linked cash-out entry and invalidate stale closing counts. Payments outside the drawer leave it unchanged. These endpoints record payments only and do not transfer money. If a response is uncertain, retry the exact request and check whether cash already changed hands before paying again.

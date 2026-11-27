@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\PosProduct;
 use App\Models\PosPurchaseReceipt;
 use App\Models\PosSupplier;
+use App\Services\PosCashDrawer;
 use App\Services\PosInventory;
+use App\Services\PosSupplierPayments;
 use App\Services\PosListing;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -54,13 +56,14 @@ class PosPurchaseReceiptController extends Controller
             'supplier_id' => ['required', 'integer', 'min:1'],
             'invoice_reference' => ['nullable', 'string', 'max:80'],
             'note' => ['nullable', 'string', 'max:240'],
+            'payment' => ['nullable', 'array:amount_minor,source,cash_session_id,note', 'required_array_keys:amount_minor,source'],
             'lines' => ['required', 'array', 'list', 'min:1', 'max:50'],
             'lines.*' => ['required', 'array:product_id,unit_id,quantity_milli,unit_cost_minor'],
             'lines.*.product_id' => ['required', 'integer', 'min:1', 'distinct'],
             'lines.*.unit_id' => ['required', 'integer', 'min:1'],
             'lines.*.quantity_milli' => ['required', 'integer', 'between:1,1000000000'],
             'lines.*.unit_cost_minor' => ['required', 'integer', 'between:0,99999999'],
-        ]);
+        ] + PosSupplierPayments::rules('payment.'));
         $actor = $request->user();
         $key = strtolower($body['request_id']);
         $supplierId = (int) $body['supplier_id'];
@@ -73,7 +76,12 @@ class PosPurchaseReceiptController extends Controller
             'unit_cost_minor' => (int) $line['unit_cost_minor'],
         ], $body['lines']);
         usort($lines, fn ($a, $b) => $a['product_id'] <=> $b['product_id']);
-        $hash = hash('sha256', json_encode([$supplierId, $invoice, $note, $lines], JSON_THROW_ON_ERROR));
+        $payment = isset($body['payment']) ? PosSupplierPayments::normalize($body['payment']) : null;
+        $fingerprint = [$supplierId, $invoice, $note, $lines];
+        if ($payment !== null) {
+            $fingerprint[] = $payment;
+        }
+        $hash = hash('sha256', json_encode($fingerprint, JSON_THROW_ON_ERROR));
 
         // Check completed retries before current supplier or stock validation. Keep this read
         // outside the posting transaction so MySQL does not establish an early read snapshot.
@@ -82,7 +90,8 @@ class PosPurchaseReceiptController extends Controller
             return $this->replay($existing, $actor->id, $hash);
         }
 
-        return DB::transaction(function () use ($actor, $key, $supplierId, $invoice, $note, $lines, $hash) {
+        return DB::transaction(function () use ($actor, $key, $supplierId, $invoice, $note, $lines, $hash, $payment) {
+            $drawer = ($payment['source'] ?? null) === 'drawer' ? PosCashDrawer::lock() : null;
             $supplier = PosSupplier::lockForUpdate()->find($supplierId);
             if (!$supplier) {
                 throw ValidationException::withMessages(['supplier_id' => 'Select an existing supplier.']);
@@ -92,7 +101,7 @@ class PosPurchaseReceiptController extends Controller
             DB::table('pos_purchase_receipts')->upsert([[
                 'request_id' => $key, 'payload_hash' => $hash, 'supplier_id' => $supplier->id,
                 'supplier_name' => $supplier->name, 'user_id' => $actor->id, 'actor' => $actor->name,
-                'invoice_reference' => $invoice, 'note' => $note, 'created_at' => $now, 'updated_at' => $now,
+                'invoice_reference' => $invoice, 'note' => $note, 'payment_tracking' => true, 'created_at' => $now, 'updated_at' => $now,
             ]], ['request_id'], ['request_id']);
             $receipt = PosPurchaseReceipt::where('request_id', $key)->lockForUpdate()->firstOrFail();
             if ($receipt->line_count > 0) {
@@ -124,6 +133,10 @@ class PosPurchaseReceiptController extends Controller
                 $total += $lineTotal;
             }
             $receipt->forceFill(['total_minor' => $total, 'line_count' => count($lines)])->save();
+
+            if ($payment !== null) {
+                PosSupplierPayments::record($receipt, $actor, $key, $payment, $drawer);
+            }
 
             return response()->json($receipt->load('lines'), 201);
         }, 3);

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\PosCategory;
 use App\Models\PosCustomer;
 use App\Models\PosProduct;
+use App\Models\PosPurchaseReceipt;
 use App\Models\PosSupplier;
 use App\Models\PosStockMovement;
 use App\Models\PosUnit;
@@ -44,7 +45,10 @@ class PosManagementController extends Controller
                 $query->where('supplier_id', $supplierId);
             }
         } elseif ($resource === 'suppliers') {
-            $query->withCount('products');
+            $query->withCount('products')->addSelect([
+                'supplier_balance_minor' => PosPurchaseReceipt::query()->whereColumn('supplier_id', 'pos_suppliers.id')
+                    ->where('payment_tracking', true)->selectRaw('COALESCE(SUM(total_minor - paid_minor), 0)'),
+            ])->withCasts(['supplier_balance_minor' => 'string']);
         }
         if ($term !== '') {
             $columns = match ($resource) {
