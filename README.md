@@ -80,3 +80,9 @@ Run the additive `2026_11_27_000010` migration with `php artisan migrate`. Exist
 - Posting adds all stock and corresponding inventory ledger entries in one transaction. A rejected receipt changes nothing. Retry an uncertain post with the original request ID and identical values; the same clerk gets the original receipt without adding stock again. Posted receipts are immutable and capture supplier, product, unit and staff at posting time.
 - `GET /api/pos/purchases` accepts `supplier_id`, `q` (receipt number, supplier name, or invoice), `page` and `per_page`. `GET /api/pos/purchases/{id}` returns saved lines and costs. `GET /api/pos/purchases/products` feeds the active product picker. Inventory history links new stock movements to the purchase receipt. The original single-product receiving API and its historical movements remain available.
 - Receiving records purchase costs and stock only. It does not change POS prices, update a cash drawer, pay a supplier, or calculate cost of goods sold.
+
+## Customers
+
+Run `php artisan migrate` to add the optional customer directory and link. Authenticated `/api/pos/management/customers` supports creation, updates, server paging, search by name/email/phone, and archiving. Name is required to create a customer; email and phone are optional. Archived customers are hidden from new selections. No customer is required for a sale.
+
+Order writes accept an optional `customer_id`. When a customer is selected, the server saves their name on the order so historical receipts do not change when the directory is edited or archived. Drafts can keep, change, or clear the selection. Existing order names and retry references remain valid. No customer email or phone is printed.

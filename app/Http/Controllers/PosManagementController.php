@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\PosCategory;
+use App\Models\PosCustomer;
 use App\Models\PosProduct;
 use App\Models\PosSupplier;
 use App\Models\PosStockMovement;
@@ -28,6 +29,7 @@ class PosManagementController extends Controller
         'categories' => PosCategory::class,
         'units' => PosUnit::class,
         'suppliers' => PosSupplier::class,
+        'customers' => PosCustomer::class,
     ];
 
     public function index(Request $request, string $resource): JsonResponse
@@ -49,7 +51,7 @@ class PosManagementController extends Controller
                 'products' => ['name', 'sku', 'internal_code', 'barcode'],
                 'categories' => ['name', 'slug'],
                 'units' => ['name', 'code'],
-                'suppliers' => ['name', 'email', 'phone'],
+                'suppliers', 'customers' => ['name', 'email', 'phone'],
             };
             $query->where(function ($match) use ($columns, $term, $resource): void {
                 PosListing::whereContains($match, $columns, $term);
@@ -169,6 +171,8 @@ class PosManagementController extends Controller
         $record = self::TYPES[$resource]::findOrFail($id);
         if ($resource === 'products') {
             $record->update(['is_active' => false]);
+        } elseif ($resource === 'customers') {
+            $record->delete();
         } else {
             $foreignKey = match ($resource) {
                 'categories' => 'category_id', 'units' => 'unit_id', 'suppliers' => 'supplier_id',
@@ -222,11 +226,11 @@ class PosManagementController extends Controller
             'categories' => $record ? [] : ['slug' => ['required', 'string', 'max:48', 'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/D', 'not_in:all', $unique('slug')]],
             'units' => ($record ? [] : ['code' => ['required', 'string', 'max:16', 'regex:/^[a-z0-9]+(?:-[a-z0-9]+)*$/D', $unique('code')]])
                 + ['quantity_precision' => ['required', 'integer', 'between:0,3']],
-            'suppliers' => ['email' => ['nullable', 'email:rfc', 'max:254'], 'phone' => ['nullable', 'string', 'max:40']],
+            'suppliers', 'customers' => ['email' => ['nullable', 'email:rfc', 'max:254'], 'phone' => ['nullable', 'string', 'max:40']],
         };
 
         $data = $request->validate(['name' => ['required', 'string', 'max:'.match ($resource) {
-            'units' => 40, 'categories' => 100, default => 150,
+            'units' => 40, 'categories' => 100, 'customers' => 120, default => 150,
         }]] + $fields);
 
         if ($resource === 'products') {

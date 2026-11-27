@@ -52,7 +52,7 @@ Route::prefix('api/pos')->group(function (): void {
         Route::put('/orders/{order}', [PosOrderController::class, 'update'])->whereNumber('order');
         Route::get('/orders/{order}', [PosOrderController::class, 'show'])->whereNumber('order');
         Route::prefix('management')->group(function (): void {
-            $resources = ['products', 'categories', 'units', 'suppliers'];
+            $resources = ['products', 'categories', 'units', 'suppliers', 'customers'];
             Route::get('/options', [PosManagementController::class, 'options']);
             Route::get('/{resource}', [PosManagementController::class, 'index'])->whereIn('resource', $resources);
             Route::post('/{resource}', [PosManagementController::class, 'store'])->whereIn('resource', $resources);

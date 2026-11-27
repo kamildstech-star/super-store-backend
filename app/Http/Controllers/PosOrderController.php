@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\PosCustomer;
 use App\Models\PosOrder;
 use App\Models\PosProduct;
 use App\Models\User;
@@ -93,7 +94,7 @@ class PosOrderController extends Controller
                 return response()->json(['message' => 'This order was changed elsewhere. Open it again to edit the latest version.'], 409);
             }
 
-            $saved->fill($this->orderAttributes($body, $saved->lines))->forceFill([
+            $saved->fill($this->orderAttributes($body, $saved))->forceFill([
                 'update_request_id' => $body['update_id'] ?? null,
                 'update_fingerprint' => isset($body['update_id']) ? $fingerprint : null,
             ])->save();
@@ -149,7 +150,7 @@ class PosOrderController extends Controller
                 PosOrderNumber::assign($saved);
                 $saved->save();
             }
-            $attributes = $order === null ? ['lines' => $saved->lines, 'total_minor' => $saved->total_minor] : $this->orderAttributes($body, $saved->lines);
+            $attributes = $order === null ? ['lines' => $saved->lines, 'total_minor' => $saved->total_minor] : $this->orderAttributes($body, $saved);
             $received = (int) $body['cash_received_minor'];
             if ($received < $attributes['total_minor']) {
                 throw ValidationException::withMessages(['cash_received_minor' => 'Cash received must cover the sale total.']);
@@ -195,6 +196,10 @@ class PosOrderController extends Controller
             $submission[] = (int) $body['cash_session_id'];
         }
 
+        if (isset($body['customer_id'])) {
+            $submission['customer_id'] = (int) $body['customer_id'];
+        }
+
         return hash('sha256', json_encode($submission, JSON_THROW_ON_ERROR));
     }
 
@@ -211,19 +216,25 @@ class PosOrderController extends Controller
 
     private function revision(PosOrder $order): string
     {
-        return hash('sha256', json_encode([
+        $revision = [
             $order->customer, $order->note, array_map(function (array $line): array {
                 ksort($line);
 
                 return $line;
             }, $order->lines),
-        ], JSON_THROW_ON_ERROR));
+        ];
+        if ($order->customer_id !== null) {
+            $revision['customer_id'] = $order->customer_id;
+        }
+
+        return hash('sha256', json_encode($revision, JSON_THROW_ON_ERROR));
     }
 
     private function orderRules(): array
     {
         return [
             'customer' => ['nullable', 'string', 'max:120'],
+            'customer_id' => ['nullable', 'integer', 'min:1'],
             'note' => ['nullable', 'string', 'max:160'],
             'lines' => ['required', 'array', 'list', 'min:1', 'max:100'],
             'lines.*' => ['required', 'array:sku,qty,price_minor,discount'],
@@ -234,9 +245,9 @@ class PosOrderController extends Controller
         ];
     }
 
-    private function orderAttributes(array $body, array $previous = []): array
+    private function orderAttributes(array $body, ?PosOrder $previous = null): array
     {
-        $previousBySku = array_column($previous, null, 'sku');
+        $previousBySku = array_column($previous?->lines ?? [], null, 'sku');
         $products = PosProduct::query()->with('unit')->where('is_active', true)
             ->whereIn('sku', array_column($body['lines'], 'sku'))->get()->keyBy('sku');
         $lines = [];
@@ -275,10 +286,36 @@ class PosOrderController extends Controller
             ];
         }
 
-        return Arr::only($body, ['customer', 'note']) + [
+        return $this->customerAttributes($body, $previous) + Arr::only($body, ['note']) + [
             'line_count' => count($lines),
             'total_minor' => array_sum(array_column($lines, 'total_minor')),
             'lines' => $lines,
         ];
+    }
+
+    private function customerAttributes(array $body, ?PosOrder $previous): array
+    {
+        if (isset($body['customer_id'])) {
+            $id = (int) $body['customer_id'];
+            if ($id === $previous?->customer_id) {
+                // A draft keeps its saved snapshot, even if the directory entry was archived.
+                return ['customer_id' => $id, 'customer' => $previous->customer];
+            }
+
+            $record = PosCustomer::query()->sharedLock()->find($id);
+            if (!$record) {
+                throw ValidationException::withMessages(['customer_id' => 'This customer is no longer available. Choose another customer or clear the selection.']);
+            }
+
+            return ['customer_id' => $record->id, 'customer' => $record->name];
+        }
+
+        // Older clients and old parked orders can still carry a name with no directory link.
+        if (!array_key_exists('customer_id', $body)
+            && (!array_key_exists('customer', $body) || $body['customer'] === $previous?->customer)) {
+            return [];
+        }
+
+        return ['customer_id' => null, 'customer' => $body['customer'] ?? null];
     }
 }
