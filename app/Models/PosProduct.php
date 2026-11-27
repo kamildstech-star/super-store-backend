@@ -35,6 +35,11 @@ class PosProduct extends Model
         return $this->belongsTo(PosCategory::class, 'category_id');
     }
 
+    public function supplier(): BelongsTo
+    {
+        return $this->belongsTo(PosSupplier::class);
+    }
+
     public function unit(): BelongsTo
     {
         return $this->belongsTo(PosUnit::class, 'unit_id');

@@ -7,6 +7,7 @@ use App\Http\Controllers\PosCatalogController;
 use App\Http\Controllers\PosManagementController;
 use App\Http\Controllers\PosInventoryController;
 use App\Http\Controllers\PosOrderController;
+use App\Http\Controllers\PosPurchaseReceiptController;
 use App\Http\Controllers\PosSalesReportController;
 use App\Http\Controllers\PosProductImageController;
 use Illuminate\Support\Facades\Route;
@@ -24,6 +25,10 @@ Route::prefix('api/pos')->group(function (): void {
     Route::middleware(['auth', 'throttle:120,1'])->group(function (): void {
         Route::post('/auth/logout', [PosAuthController::class, 'logout']);
         Route::get('/catalog', PosCatalogController::class)->name('pos.catalog');
+        Route::get('/purchases', [PosPurchaseReceiptController::class, 'index']);
+        Route::get('/purchases/products', [PosPurchaseReceiptController::class, 'products']);
+        Route::get('/purchases/{receipt}', [PosPurchaseReceiptController::class, 'show'])->whereNumber('receipt');
+        Route::post('/purchases', [PosPurchaseReceiptController::class, 'store']);
         Route::get('/inventory', [PosInventoryController::class, 'index']);
         Route::get('/reports/sales', PosSalesReportController::class);
         Route::get('/orders/{order}/return-options', [PosRefundController::class, 'options'])->whereNumber('order');

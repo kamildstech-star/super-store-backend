@@ -70,3 +70,13 @@ Run `php artisan migrate` for migration `2026_11_27_000008`, then use the matchi
 Migration `2026_11_27_000009` adds the counter. A new order receives its number on its first successful Park, draft save or direct checkout. All cashiers share the sequence for the Pakistan calendar date, starting with `#0001`. Reopening, checkout of an older draft, and retries keep the original number and business date. Existing numbered receipts from before this migration keep their old ID-based labels. API routes and foreign keys still use the permanent order ID, not the displayed number.
 
 Orders can be searched by number across dates, or by date and number together, for example `2026-11-27 #0001`. The sales report still groups sales by finalization date. The order business date displayed alongside the reference is the date it was first saved.
+
+## Purchase Receiving
+
+Run the additive `2026_11_27_000010` migration with `php artisan migrate`. Existing product supplier links, receipts, and stock movements are unchanged. Do not reseed an existing store.
+
+- A product's existing optional `supplier_id` is its **preferred supplier**, not an exclusive relationship. Product listings include its supplier name and accept `supplier_id` as a filter. Supplier listings include a count of linked products (including archived products).
+- `POST /api/pos/purchases` posts a supplier delivery. It accepts a UUID `request_id`, a `supplier_id`, optional `invoice_reference` and `note`, and 1–50 distinct product lines. Each line specifies `product_id`, the expected `unit_id`, positive `quantity_milli` (thousandths of the stock unit), and nonnegative `unit_cost_minor` (PKR paisa per stock unit). Quantities must match unit precision. Each line cost is rounded half up to the nearest paisa before totaling.
+- Posting adds all stock and corresponding inventory ledger entries in one transaction. A rejected receipt changes nothing. Retry an uncertain post with the original request ID and identical values; the same clerk gets the original receipt without adding stock again. Posted receipts are immutable and capture supplier, product, unit and staff at posting time.
+- `GET /api/pos/purchases` accepts `supplier_id`, `q` (receipt number, supplier name, or invoice), `page` and `per_page`. `GET /api/pos/purchases/{id}` returns saved lines and costs. `GET /api/pos/purchases/products` feeds the active product picker. Inventory history links new stock movements to the purchase receipt. The original single-product receiving API and its historical movements remain available.
+- Receiving records purchase costs and stock only. It does not change POS prices, update a cash drawer, pay a supplier, or calculate cost of goods sold.

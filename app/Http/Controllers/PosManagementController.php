@@ -35,6 +35,15 @@ class PosManagementController extends Controller
         $filters = PosListing::filters($request);
         $term = $filters['q'] ?? '';
         $query = self::TYPES[$resource]::query()->orderBy('name')->orderBy('id');
+        if ($resource === 'products') {
+            $query->with('supplier:id,name');
+            $supplierId = $request->validate(['supplier_id' => ['nullable', 'integer', 'min:1']])['supplier_id'] ?? null;
+            if ($supplierId !== null) {
+                $query->where('supplier_id', $supplierId);
+            }
+        } elseif ($resource === 'suppliers') {
+            $query->withCount('products');
+        }
         if ($term !== '') {
             $columns = match ($resource) {
                 'products' => ['name', 'sku', 'internal_code', 'barcode'],

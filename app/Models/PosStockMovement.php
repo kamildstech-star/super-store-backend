@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class PosStockMovement extends Model
 {
     protected $fillable = [
-        'product_id', 'supplier_id', 'order_id', 'refund_id', 'user_id', 'actor', 'supplier_name',
+        'product_id', 'supplier_id', 'order_id', 'refund_id', 'purchase_receipt_id', 'user_id', 'actor', 'supplier_name',
         'type', 'request_id', 'delta_milli', 'balance_milli', 'reason',
     ];
 
