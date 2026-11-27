@@ -94,3 +94,7 @@ Run `php artisan migrate` for the store profile and receipt branding snapshots. 
 New finalized sales and posted refunds carry the store details that were in effect when issued. Reprints use that saved snapshot. Pre-migration receipts retain the original “Super Store” presentation. PKR and Pakistan time remain fixed; settings do not alter transaction totals or business dates.
 
 Store Settings also returns `receipt_width_mm` (58 or 80; default 80). PUT accepts this optional field; callers that omit it keep the saved width. The width applies to current printing and is separate from the immutable brand details on issued receipts.
+
+### Inventory alerts
+
+Authenticated `GET /api/pos/inventory/alerts` returns `alert_count` and `out_of_stock_count` for active products only, across all pages. The first count includes stock at or below its threshold and includes all out-of-stock products (even with a threshold of zero). The second count is the out-of-stock subset. The response is not cached. No migration is needed for this endpoint.

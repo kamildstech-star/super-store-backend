@@ -33,6 +33,7 @@ Route::prefix('api/pos')->group(function (): void {
         Route::get('/purchases/{receipt}', [PosPurchaseReceiptController::class, 'show'])->whereNumber('receipt');
         Route::post('/purchases', [PosPurchaseReceiptController::class, 'store']);
         Route::get('/inventory', [PosInventoryController::class, 'index']);
+        Route::get('/inventory/alerts', [PosInventoryController::class, 'alerts']);
         Route::get('/reports/sales', PosSalesReportController::class);
         Route::get('/orders/{order}/return-options', [PosRefundController::class, 'options'])->whereNumber('order');
         Route::get('/orders/{order}/refunds', [PosRefundController::class, 'index'])->whereNumber('order');

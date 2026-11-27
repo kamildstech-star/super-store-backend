@@ -225,6 +225,37 @@ class PosManagementTest extends TestCase
         $this->deleteJson('/api/pos/management/suppliers/'.$supplier)->assertConflict();
     }
 
+    public function test_stock_alerts_match_active_inventory_and_refresh_after_stock_changes(): void
+    {
+        $path = '/api/pos/inventory/alerts';
+        $this->getJson($path)->assertUnauthorized();
+        $this->seed();
+        $this->actingAs($this->manager());
+        $summary = $this->getJson($path)->assertOk()
+            ->assertExactJson(['alert_count' => 16, 'out_of_stock_count' => 16]);
+        $this->assertStringContainsString('no-store', $summary->headers->get('Cache-Control'));
+        PosProduct::query()->update(['stock_milli' => 10000]);
+        $this->getJson($path)->assertExactJson(['alert_count' => 0, 'out_of_stock_count' => 0]);
+
+        $water = PosProduct::where('sku', 'MIN-01')->firstOrFail();
+        $apple = PosProduct::where('sku', 'APL-13')->firstOrFail();
+        $cola = PosProduct::where('sku', 'COL-02')->firstOrFail();
+        $inventory = '/api/pos/inventory';
+        $move = fn ($product, $quantity) => $this->postJson($inventory.'/'.$product->id.'/movements', [
+            'request_id' => (string) \Illuminate\Support\Str::uuid(), 'type' => 'adjustment',
+            'quantity' => $quantity, 'reason' => 'Inventory alert fixture',
+        ]);
+        $move($water, -10)->assertCreated();
+        $move($apple, -9.5)->assertCreated();
+        $move($cola, -10)->assertCreated();
+        $this->deleteJson('/api/pos/management/products/'.$cola->id)->assertNoContent();
+        $this->putJson($inventory.'/'.$apple->id.'/threshold', ['quantity' => 0.5])->assertOk();
+        $this->getJson($path)->assertExactJson(['alert_count' => 2, 'out_of_stock_count' => 1]);
+        $this->getJson($inventory.'?low_stock=1&status=active&per_page=1')->assertJsonPath('meta.total', 2);
+        $move($water, 2)->assertCreated();
+        $this->getJson($path)->assertExactJson(['alert_count' => 1, 'out_of_stock_count' => 0]);
+    }
+
     public function test_archived_inventory_is_visible_and_stock_can_only_be_reduced(): void
     {
         $this->seed();

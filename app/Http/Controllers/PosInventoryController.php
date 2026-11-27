@@ -14,6 +14,19 @@ use Illuminate\Validation\ValidationException;
 
 class PosInventoryController extends Controller
 {
+    public function alerts(): JsonResponse
+    {
+        // Include zero stock even when the reorder threshold is zero.
+        $counts = PosProduct::query()->where('is_active', true)->whereColumn('stock_milli', '<=', 'low_stock_milli')
+            ->selectRaw('COUNT(*) AS alert_count, SUM(CASE WHEN stock_milli = 0 THEN 1 ELSE 0 END) AS out_of_stock_count')
+            ->first();
+
+        return response()->json([
+            'alert_count' => (int) $counts->alert_count,
+            'out_of_stock_count' => (int) $counts->out_of_stock_count,
+        ])->header('Cache-Control', 'no-store');
+    }
+
     public function index(Request $request): JsonResponse
     {
         $filters = PosListing::filters($request);
