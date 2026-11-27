@@ -86,3 +86,9 @@ Run the additive `2026_11_27_000010` migration with `php artisan migrate`. Exist
 Run `php artisan migrate` to add the optional customer directory and link. Authenticated `/api/pos/management/customers` supports creation, updates, server paging, search by name/email/phone, and archiving. Name is required to create a customer; email and phone are optional. Archived customers are hidden from new selections. No customer is required for a sale.
 
 Order writes accept an optional `customer_id`. When a customer is selected, the server saves their name on the order so historical receipts do not change when the directory is edited or archived. Drafts can keep, change, or clear the selection. Existing order names and retry references remain valid. No customer email or phone is printed.
+
+## Store settings
+
+Run `php artisan migrate` for the store profile and receipt branding snapshots. Authenticated `GET /api/pos/settings` returns the current profile, revision, fixed currency, and fixed timezone. `PUT /api/pos/settings` requires the revision, store name, and the optional fields `address`, `phone`, and `receipt_footer` (send null to clear). Stale edits conflict rather than overwriting another session. Repeating identical values leaves the revision unchanged.
+
+New finalized sales and posted refunds carry the store details that were in effect when issued. Reprints use that saved snapshot. Pre-migration receipts retain the original “Super Store” presentation. PKR and Pakistan time remain fixed; settings do not alter transaction totals or business dates.

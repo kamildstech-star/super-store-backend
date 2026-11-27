@@ -8,6 +8,7 @@ use App\Models\PosRefund;
 use App\Models\PosStockMovement;
 use App\Services\PosCashDrawer;
 use App\Services\PosInventory;
+use App\Services\PosStoreProfile;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -71,6 +72,7 @@ class PosRefundController extends Controller
             }
             $refund = PosRefund::create([
                 'order_id' => $sale->id, 'cash_session_id' => $session, 'user_id' => $actor->id, 'actor' => $actor->name,
+                'receipt_store' => PosStoreProfile::branding(),
                 'request_id' => $body['request_id'], 'fingerprint' => $fingerprint, 'reason' => $body['reason'],
                 'total_minor' => $quote['total_minor'], 'lines' => array_map(function ($line) {
                     unset($line['returned_milli'], $line['product_id']);

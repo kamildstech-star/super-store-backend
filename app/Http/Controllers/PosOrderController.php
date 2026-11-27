@@ -10,6 +10,7 @@ use App\Services\PosListing;
 use App\Services\PosCashDrawer;
 use App\Services\PosInventory;
 use App\Services\PosOrderNumber;
+use App\Services\PosStoreProfile;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -168,6 +169,7 @@ class PosOrderController extends Controller
 
             $saved->fill($attributes)->forceFill([
                 'finalized_at' => now(), 'checkout_id' => $checkoutId, 'payment_method' => $body['payment_method'], 'finalized_by' => $user->id,
+                'receipt_store' => PosStoreProfile::branding(),
                 'cash_session_id' => $cashSession, 'finalized_cashier' => $user->name, 'cash_received_minor' => $received, 'checkout_fingerprint' => $fingerprint,
             ])->save();
 

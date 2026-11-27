@@ -9,6 +9,7 @@ use App\Http\Controllers\PosInventoryController;
 use App\Http\Controllers\PosOrderController;
 use App\Http\Controllers\PosPurchaseReceiptController;
 use App\Http\Controllers\PosSalesReportController;
+use App\Http\Controllers\PosSettingsController;
 use App\Http\Controllers\PosProductImageController;
 use Illuminate\Support\Facades\Route;
 
@@ -24,6 +25,8 @@ Route::prefix('api/pos')->group(function (): void {
 
     Route::middleware(['auth', 'throttle:120,1'])->group(function (): void {
         Route::post('/auth/logout', [PosAuthController::class, 'logout']);
+        Route::get('/settings', [PosSettingsController::class, 'show']);
+        Route::put('/settings', [PosSettingsController::class, 'update']);
         Route::get('/catalog', PosCatalogController::class)->name('pos.catalog');
         Route::get('/purchases', [PosPurchaseReceiptController::class, 'index']);
         Route::get('/purchases/products', [PosPurchaseReceiptController::class, 'products']);
